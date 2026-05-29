@@ -1,0 +1,283 @@
+/**
+ * @file
+ *
+ * @date Created  on Sep 30, 2025
+ * @author Attila Kovacs
+ */
+
+/// \cond PRIVATE
+#define __NOVAS_INTERNAL_API__      ///< Use definitions meant for internal use by SuperNOVAS only
+/// \endcond
+
+#include "supernovas.h"
+
+
+
+namespace supernovas {
+
+/**
+ * Instantiates a distance (signed scalar separation along some direction) with the specified
+ * value in meters. You may use Unit to convert other distance measures to meters. For example, to
+ * set a distance of 12.4 parsecs, you might simply write:
+ *
+ * ```c
+ *   Coordinate d(12.4 * Unit::pc);
+ * ```
+ *
+ * @param meters    [m] The initializing value.
+ *
+ * @sa zero(), at_Gpc()
+ */
+Coordinate::Coordinate(double meters) : Scalar(meters) {
+  if(!is_valid())
+    novas_trace_invalid("Coordinate()");
+}
+
+/**
+ * Returns the absolute value of this distance.
+ *
+ * @return    the absolute value (length or distance) for this coordinate, as a coordinate itself.
+ */
+Coordinate Coordinate::abs() const {
+  Coordinate d(fabs(_value));
+  if(!d.is_valid())
+    novas_trace_invalid("Coordinate::abs()");
+  return d;
+}
+
+/**
+ * Returns the scalar velocity that is equal to this coordinate travelled under the specified time
+ * interval.
+ *
+ * @param dt   the time interval on the right-hand-side of '/'.
+ * @return     scalar velocity v = x / dt, where x is this coordinate.
+ *
+ * @sa Position::operator/()
+ */
+ScalarVelocity Coordinate::operator/(const Interval& dt) const {
+  ScalarVelocity v(_value / dt.seconds());
+  if(!v.is_valid())
+    novas_trace_invalid("Coordinate::operator/()");
+  return v;
+}
+
+/**
+ * Returns the distance in meters.
+ *
+ * @return    [m] the distance in meters.
+ *
+ * @sa km(), au(), lyr(), pc(), kpc(), Mpc(), Gpc()
+ */
+double Coordinate::m() const {
+  return _value;
+}
+
+/**
+ * Returns the distance in kilometers.
+ *
+ * @return    [km] the distance in kilometers.
+ *
+ * @sa m(), au(), lyr(), pc(), kpc(), Mpc(), Gpc()
+ */
+double Coordinate::km() const {
+  return 1e-3 * _value;
+}
+
+/**
+ * Returns the distance in astronomical units.
+ *
+ * @return    [AU] the distance in astronomical units.
+ *
+ * @sa m(), km(), lyr(), pc(), kpc(), Mpc(), Gpc()
+ */
+double Coordinate::au() const {
+  return _value / Unit::au;
+}
+
+/**
+ * Returns the distance in lightyears.
+ *
+ * @return    [lyr] the distance in lightyears.
+ *
+ * @sa m(), km(), au(), pc(), kpc(), Mpc(), Gpc()
+ */
+double Coordinate::lyr() const {
+  return _value / Unit::lyr;
+}
+
+/**
+ * Returns the distance in parsecs.
+ *
+ * @return    [pc] the distance in parsecs.
+ *
+ * @sa m(), km(), au(), lyr(), kpc(), Mpc(), Gpc()
+ */
+double Coordinate::pc() const {
+  return _value / Unit::pc;
+}
+
+/**
+ * Returns the distance in kiloparsecs.
+ *
+ * @return    [kpc] the distance in kiloparsecs.
+ *
+ * @sa m(), km(), au(), lyr(), pc(), Mpc(), Gpc()
+ */
+double Coordinate::kpc() const {
+  return _value / Unit::kpc;
+}
+
+/**
+ * Returns the distance in megaparsecs.
+ *
+ * @return    [Mpc] the distance in megaparsecs.
+ *
+ * @sa m(), km(), au(), lyr(), pc(), kpc(), Gpc()
+ */
+double Coordinate::Mpc() const {
+  return _value / Unit::Mpc;
+}
+
+/**
+ * Returns the distance in gigaparsecs.
+ *
+ * @return    [Gpc] the distance in gigaparsecs.
+ *
+ * @sa m(), km(), au(), lyr(), pc(), kpc(), Mpc()
+ */
+double Coordinate::Gpc() const {
+  return _value / Unit::Gpc;
+}
+
+/**
+ * Returns the parallax angle that corresponds to this distance instance.
+ *
+ * @return    the parallax angle corresponding to this distance.
+ *
+ * @sa from_parallax()
+ */
+Angle Coordinate::parallax() const {
+  Angle a(Unit::arcsec / pc());
+  if(!a.is_valid())
+    novas_trace_invalid("Coordinate::parallax()");
+  return a;
+}
+
+
+std::string Coordinate::SI_unit() const {
+  return "m";
+}
+
+/**
+ * Returns a string representation of this distance using the specified number of significant
+ * figures and a best matched distance unit, e.g. "10.96 km", or 305.6 pc" etc.
+ *
+ * @return    A human readable string representation of the distance and a unit specifier.
+ *
+ * @since 1.6
+ */
+std::string Coordinate::to_string(int decimals) const {
+  char s[40] = {'\0'};
+
+  double value;
+  const char *unit;
+
+  if(decimals < 0)
+    decimals = 0;
+  else if(decimals > 16)
+    decimals = 16;
+
+  double d = fabs(_value);
+
+  if(d < 1e4) {
+    value = _value;
+    unit = "m";
+  }
+  else if(d < 1e9) {
+    value = km();
+    unit = "km";
+  }
+  else if(d < 1000.0 * Unit::au) {
+    value = au();
+    unit = "AU";
+  }
+  else if(d < 1000.0 * Unit::pc) {
+    value = pc();
+    unit = "pc";
+  }
+  else if(d < 1e6 * Unit::pc) {
+    value = kpc();
+    unit = "kpc";
+  }
+  else if(d < 1e9 * Unit::pc) {
+    value = Mpc();
+    unit = "Mpc";
+  }
+  else {
+    value = Gpc();
+    unit = "Gpc";
+  }
+
+  snprintf(s, sizeof(s), "%.*f", decimals, value);
+
+  return std::string(s) + " " + std::string(unit);
+}
+
+/**
+ * Returns a new distance instance corresponding to a parallax angle.
+ *
+ * @param parallax      The parallax angle, which defines the distance
+ * @return              a distance instance corresponding to the specified parallax angle
+ *
+ * @since 1.6
+ * @sa parallax()
+ */
+Coordinate Coordinate::from_parallax(const Angle& parallax) {
+  if(!parallax.is_valid())
+    novas_set_errno(EINVAL, "Coordinate::from_parallax()", "input parallax is invalid");
+
+  Coordinate x(Unit::pc / (fabs(parallax.arcsec())));
+  if(!x.is_valid())
+    novas_trace_invalid("Coordinate::from_parallax()");
+  return x;
+}
+
+/**
+ * Returns a standard zero distance.
+ *
+ * @return    A reference to a persistent standard zero distance instance.
+ *
+ * @since 1.6
+ */
+const Coordinate& Coordinate::zero() {
+  static const Coordinate _zero = Coordinate(0.0);
+  return _zero;
+}
+
+/**
+ * Returns a standard distance of 1 Gpc. Historically NOVAS placed sidereal source at 1 Gpc
+ * distance if the distance was not specified otherwise. SuperNOVAS follows that, and so this
+ * static method can be used to obtain a persistent reference to a 1 Gpc instance.
+ *
+ * @return    A reference to a persistent standard 1 Gpc distance instance.
+ *
+ * @since 1.6
+ */
+const Coordinate& Coordinate::at_Gpc() {
+  static const Coordinate _at_Gpc = Coordinate(Unit::Gpc);
+  return _at_Gpc;
+}
+
+/**
+ * Returns a reference to a static instance of an undefined / invalid coordinate.
+ *
+ * @return    a reference to a standard instance of an undefined coordinate.
+ *
+ * @since 1.6
+ */
+const Coordinate& Coordinate::undefined() {
+  static const Coordinate _undefined = Coordinate();
+  return _undefined;
+}
+
+} // namespace supernovas

@@ -1,0 +1,256 @@
+/**
+ * @file
+ *
+ * @date Created  on Sep 30, 2025
+ * @author Attila Kovacs
+ */
+
+/// \cond PRIVATE
+#define __NOVAS_INTERNAL_API__      ///< Use definitions meant for internal use by SuperNOVAS only
+/// \endcond
+
+#include "supernovas.h"
+
+
+
+namespace supernovas {
+
+/**
+ * Instantiates an angle, to be represented as time on a 24 hour interval, from a canonical angle
+ * in radians.
+ *
+ * @param radians   [rad] the angle in radians
+ *
+ * @since 1.6
+ */
+TimeAngle::TimeAngle(double radians)
+: Angle(radians) {
+  if(_value < 0.0) _value += TWOPI;
+}
+
+/**
+ * Instantiates an angle, to be represented as time on a 24 hour interval, from a HMS or decimal
+ * string representation of time.
+ *
+ * @param str   A decimal or HMS representation of time, using spaces, colons, and/or the letters
+ *              `h`, `m` (and optionally `s`) as separators.
+ *
+ * @since 1.6
+ */
+TimeAngle::TimeAngle(const std::string& str)
+: Angle(novas_str_hours(str.c_str()) * Unit::hour_angle) {}
+
+/**
+ * Instantiates an angle, to be represented as time on a 24 hour interval, from an angle instance.
+ *
+ * @param angle   an angle to initialize with.
+ *
+ * @since 1.6
+ */
+TimeAngle::TimeAngle(const Angle& angle)
+: Angle(angle) {}
+
+/**
+ * Returns this angle as hours on a 24h interval
+ *
+ * @return    [h] the angle as hours of time on the [0.0:24.0) interval.
+ *
+ * @since 1.6
+ * @sa minutes(), seconds(), Angle::rad(), Angle::deg(), Angle::arcmin(), Angle::arcsec()
+ */
+double TimeAngle::hours() const {
+  return _value / Unit::hour_angle;
+}
+
+/**
+ * Returns this angle as minutes inside a 24h interval
+ *
+ * @return    [m] the angle as minutes of time on the [0.0:1440.0) interval.
+ *
+ * @since 1.6
+ * @sa hours(), seconds(), Angle::rad(), Angle::deg(), Angle::arcmin(), Angle::arcsec()
+ */
+double TimeAngle::minutes() const {
+  return hours() * 60.0;
+}
+
+/**
+ * Returns this angle as seconds on a 24h interval
+ *
+ * @return    [s] the angle as seconds of time on the [0.0:86400.0) interval.
+ *
+ * @since 1.6
+ * @sa hours(), minutes(), seconds(), Angle::rad(), Angle::deg(), Angle::arcmin(), Angle::arcsec()
+ */
+double TimeAngle::seconds() const {
+  return hours() * 3600.0;
+}
+
+/**
+ * Provides a DDD:MM:SS.SSS representation of the angle with the specified separators and
+ * decimal places for the arc seconds.
+ *
+ * @param separator   the type of separators / unit markers used to distinguish the degree,
+ *                    minute, and second components.
+ * @param decimals    [0:9] the number of decimal places to print for the arc seconds
+ *                    component.
+ * @return            the strung representation of this angle in degrees.
+ *
+ * @since 1.6
+ */
+std::string TimeAngle::to_string(enum novas_separator_type separator, int decimals) const {
+  char s[100] = {'\0'};
+  novas_print_hms(hours(), separator, decimals, s, sizeof(s));
+  return std::string(s);
+}
+
+Angle TimeAngle::operator+(const Angle& r) const {
+  return Angle::operator+(r);
+}
+
+Angle TimeAngle::operator-(const Angle& r) const {
+  return Angle::operator-(r);
+}
+
+/**
+ * Returns a new time-angle that is the sum of this rime-angle and the specified other time-angle.
+ *
+ * @param r   the other time-angle on the right-hand-side.
+ * @return    the sum of this time-angle and the argument, as a new time-angle.
+ *
+ * @since 1.6
+ * @sa operator-()
+ */
+TimeAngle TimeAngle::operator+(const TimeAngle& r) const {
+  TimeAngle ta(_value + r._value);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::operator+(TimeAngle&)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle that is the difference of this time-angle and the specified other
+ * time-angle.
+ *
+ * @param r   the other time-angle on the right-hand-side.
+ * @return    the difference of this time-angle and the argument, as a new time-angle.
+ *
+ * @since 1.6
+ * @sa operator+()
+ */
+TimeAngle TimeAngle::operator-(const TimeAngle& r) const {
+  TimeAngle ta(_value - r._value);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::operator-(TimeAngle&)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle that is the sum of this time-angle and the specified time interval.
+ *
+ * @param offset   the time interval on the right-hand-side.
+ * @return         the sum of this time-angle and the time interval, as a new time-angle.
+ *
+ * @since 1.6
+ * @sa operator-()
+ */
+TimeAngle TimeAngle::operator+(const Interval& offset) const {
+  TimeAngle ta(rad() + offset.hours() * Unit::hour_angle);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::operator+(Interval&)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle that is the difference of this time-angle and the specified time
+ * interval.
+ *
+ * @param offset   the time interval on the right-hand-side.
+ * @return         the difference of this time-angle and the time interval, as a new time-angle.
+ *
+ * @since 1.6
+ * @sa operator+()
+ */
+TimeAngle TimeAngle::operator-(const Interval& offset) const {
+  TimeAngle ta(rad() - offset.hours() * Unit::hour_angle);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::operator-(Interval&)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle given the specified time value in hours. The input time may be
+ * any real value, but the returned time angle will be restricted to a single 24 hour interval.
+ *
+ * @param value   [h] the angle defined as hours of time.
+ * @return        a new time-angle with the specified time defining the angle.
+ *
+ * @since 1.6
+ * @sa minutes(), seconds()
+ */
+TimeAngle TimeAngle::hours(double value) {
+  TimeAngle ta(value * Unit::hour_angle);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::hours(double)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle given the specified time value in minutes. The input time may be
+ * any real value, but the returned time angle will be restricted to a single 24 hour interval.
+ *
+ * @param value   [m] the angle defined as minutes of time.
+ * @return        a new time-angle with the specified time defining the angle.
+ *
+ * @since 1.6
+ * @sa hours(), seconds()
+ */
+TimeAngle TimeAngle::minutes(double value) {
+  TimeAngle ta(value / 60.0 * Unit::hour_angle);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::minutes(double)");
+  return ta;
+}
+
+/**
+ * Returns a new time-angle given the specified time value in seconds. The input time may be
+ * any real value, but the returned time angle will be restricted to a single 24 hour interval.
+ *
+ * @param value   [s] the angle defined as seconds of time.
+ * @return        a new time-angle with the specified time defining the angle.
+ *
+ * @since 1.6
+ * @sa hours(), minutes()
+ */
+TimeAngle TimeAngle::seconds(double value) {
+  TimeAngle ta(value / 3600.0 * Unit::hour_angle);
+  if(!ta.is_valid())
+    novas_trace_invalid("TimeAngle::seconds(double)");
+  return ta;
+}
+
+/**
+ * Returns a reference to a statically defined time-angle that represents a zero angle.
+ *
+ * @return    a reference to the statically defined zero angle.
+ *
+ * @since 1.6
+ */
+const TimeAngle& TimeAngle::zero() {
+  static const TimeAngle _zero = TimeAngle(0.0);
+  return _zero;
+}
+
+/**
+ * Returns a reference to a statically defined time angle corresponding to noon (12h).
+ *
+ * @return    a reference to the statically defined time-angle for noon (12h).
+ *
+ * @since 1.6
+ */
+const TimeAngle& TimeAngle::noon() {
+  static const TimeAngle _12h = TimeAngle(12.0 * Unit::hour_angle);
+  return _12h;
+}
+
+} // namespace supernovas

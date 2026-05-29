@@ -1,0 +1,240 @@
+/**
+ * @file
+ *
+ * @date Created  on Sep 30, 2025
+ * @author Attila Kovacs
+ */
+
+/// \cond PRIVATE
+#define __NOVAS_INTERNAL_API__      ///< Use definitions meant for internal use by SuperNOVAS only
+/// \endcond
+
+#include "supernovas.h"
+
+
+
+namespace supernovas {
+
+Vector::Vector() : _component{NAN, NAN, NAN} {}
+
+/**
+ * Instantiates a vector from its cartesian components.
+ *
+ * @param x   [arb.u.] _x_ component
+ * @param y   [arb.u.] _y_ component
+ * @param z   [arb.u.] _z_ component
+ *
+ * @since 1.6
+ */
+Vector::Vector(double x, double y, double z) : _component{x, y, z} {
+  if(!isfinite(abs()))
+    novas_set_errno(EINVAL, "Vector()", "input has NAN or infinite component(s)");
+  else
+    _valid = true;
+}
+
+/**
+ * Scales a vector by a factor, for example to cast it to/from a physical unit.
+ *
+ * @param r   scaling factor on the right-hand side
+ * @return    a new vector that is the rescaled version of this vector.
+ *
+ * @since 1.6
+ */
+Vector Vector::operator*(double r) const {
+  Vector v = scaled(r);
+  if(!v.is_valid())
+    novas_trace_invalid("Vector::operator*()");
+  return v;
+}
+
+/**
+ * Returns the component at the specified index.
+ *
+ * @param idx   [0:2] The 0-based coordinate index.
+ * @return      The component value at that index, or else NAN if the index is out of the [0:2]
+ *              (errno will be set to ERANGE).
+ *
+ * @since 1.6
+ */
+double Vector::operator[](int idx) const {
+  if(idx < 0 || idx >= 3) {
+    novas_set_errno(ERANGE, "Vector::operator[]", "index %d is out of range [0:2]", idx);
+    return NAN;
+  }
+  return _component[idx];
+}
+
+
+/**
+ * Checks if this verctor is a null vector, that is all of its components are zero.
+ *
+ * @return    `true` if this is a null vector, with all components being zero; or else `false`.
+ *
+ * @since 1.6
+ */
+bool Vector::is_zero() const {
+  return _component[0] == 0.0 && _component[1] == 0.0 && _component[2] == 0.0;
+}
+
+/**
+ * Checks if this vector is the same as another vector, within the specified precision.  Note,
+ * that a vector may not equal itself if it contains NAN or infinite components.
+ *
+ * @param v           the reference vector
+ * @param precision   precision for the equality test
+ * @return            `true` if this vector is equal to the argument within the specified
+ *                    precision, or else `false`.
+ *
+ * @since 1.6
+ */
+bool Vector::equals(const Vector& v, double precision) const {
+  return novas_equals_vector(_component, v._component, precision);
+}
+
+/**
+ * Returns a rescaled version of this vector, for example to cast it to/from a physical unit.
+ *
+ * @param factor    scaling factor, such as a cast to/from a physical unit
+ * @return          a new vector that is the rescaled version of this vector with the specified
+ *                  scaling factor.
+ *
+ * @since 1.6
+ */
+Vector Vector::scaled(double factor) const {
+  Vector v(_component[0] * factor, _component[1] * factor, _component[2] * factor);
+  if(!v.is_valid())
+    novas_trace_invalid("Vector::scaled()");
+  return v;
+}
+
+/**
+ * Returns the underlying `double[3]` C array that stores the components of this vector
+ * internally. Such an array may be used with the SuperNOVAS C functions.
+ *
+ * @return  the uderlying `double[3]` array that stores the components of this vector.
+ *
+ * @since 1.6
+ */
+const double *Vector::_array() const {
+  return _component;
+}
+
+/**
+ * Returns the absolute value (length / magnitude) of this vector.
+ *
+ * @return    the absolute value (length / magnitude) of this vector.
+ *
+ * @since 1.6
+ */
+double Vector::abs() const {
+  return novas_vlen(_component);
+}
+
+/**
+ * Returns the dot product of this vector and the specified other vector
+ *
+ * @param v   the other vector
+ * @return    the dot product of this vector and the argument.
+ *
+ * @since 1.6
+ */
+double Vector::dot(const Vector &v) const {
+  return novas_vdot(_component, v._component);
+}
+
+/**
+ * Returns the projection of this vector along the direction of another vector.
+ *
+ * @param v   the other vector
+ * @return    the projection of this vector along the direction of the argument vector.
+ *
+ * @since 1.6
+ */
+double Vector::projection_on(const Vector& v) const {
+  return dot(v) / v.abs();
+}
+
+/**
+ * Returns the azumithal angle of this vector.
+ *
+ * @return    the azimuthal angle &phi;.
+ *
+ * @since 1.6
+ * @sa theta()
+ */
+Angle Vector::phi() const {
+  Angle a(atan2(_component[1], _component[0]));
+  if(!a.is_valid())
+    novas_trace_invalid("Vector::phi()");
+  return a;
+}
+
+/**
+ * Returns the polar angleof this vector, that is the angle from the _z_ axis.
+ *
+ * @return    the polar angle &theta;.
+ *
+ * @since 1.6
+ * @sa phi()
+ */
+Angle Vector::theta() const {
+  Angle a(atan2(sqrt(_component[0] * _component[0] + _component[1] * _component[1]), _component[2]));
+  if(!a.is_valid())
+    novas_trace_invalid("Vector::theta()");
+  return a;
+}
+
+/**
+ * Returns a unit vector in the direction of this vector.
+ *
+ * @return    a new unit vector in the same direction as this vector.
+ *
+ * @since 1.6
+ */
+Vector Vector::unit_vector() const {
+  Vector u = scaled(1.0 / abs());
+  if(!u.is_valid())
+    novas_trace_invalid("Vector::unit_vector()");
+  return u;
+}
+
+/**
+ * Returns a string representation of this vector
+ *
+ * @param decimals    (optional) the numberof decimal places to print for the components
+ *                    (default: 3).
+ * @return            a string representation of this 3D vector.
+ *
+ * @since 1.6
+ */
+std::string Vector::to_string(int decimals) const {
+  char sx[40] = {'\0'}, sy[40] = {'\0'}, sz[40] = {'\0'};
+
+  novas_print_decimal(_component[0], decimals, sx, sizeof(sx));
+  novas_print_decimal(_component[1], decimals, sy, sizeof(sy));
+  novas_print_decimal(_component[2], decimals, sz, sizeof(sz));
+
+  return "VEC (" + std::string(sx) + ", " + std::string(sy) + ", " + std::string(sz) + ")";
+}
+
+/**
+ * Returns a scaled version of the vector in the right-hand side with the factor on the left-hand
+ * side
+ *
+ * @param factor    the scaling factor on the left-hand side
+ * @param v         the vector on the right-hand side
+ * @return          a new vector that is the scaled version of the input vector by the specified
+ *                  factor.
+ *
+ * @since 1.6
+ */
+Vector operator*(double factor, const Vector& v) {
+  Vector v1 = v * factor;
+  if(!v1.is_valid())
+    novas_trace_invalid("double * Vector");
+  return v1;
+}
+
+
+} // namespace supernovas

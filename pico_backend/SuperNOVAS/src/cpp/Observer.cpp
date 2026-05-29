@@ -1,0 +1,963 @@
+/**
+ * @file
+ *
+ * @date Created  on Sep 30, 2025
+ * @author Attila Kovacs
+ */
+
+#include <cstring>
+
+/// \cond PRIVATE
+#define __NOVAS_INTERNAL_API__    ///< Use definitions meant for internal use by SuperNOVAS only
+/// \endcond
+
+#include "supernovas.h"
+
+
+namespace supernovas {
+
+
+Observer::Observer() : Observer((enum novas_observer_place) -1, Site::undefined(), Position::undefined(), Velocity::undefined()) {}
+
+Observer::Observer(enum novas_observer_place type, const Site& site, const Position& pos,
+        const Velocity& vel) {
+  _observer.where = type;
+  _observer.on_surf = *site._on_surface();
+
+  double pUnit = (type == NOVAS_SOLAR_SYSTEM_OBSERVER) ? Unit::AU : Unit::km;
+  double vUnit = (type == NOVAS_SOLAR_SYSTEM_OBSERVER) ? Unit::AU_per_day : Unit::km_per_s;
+
+  for(int i = 0; i < 3; i++) {
+    _observer.near_earth.sc_pos[i] = pos[i] / pUnit;
+    _observer.near_earth.sc_vel[i] = vel[i] / vUnit;
+  }
+};
+
+/**
+ * Returns a newly allocated copy of this observer. The default implementation returns an invalid
+ * observer, but concrete subclasses should override that to return their onw copies.
+ *
+ * @return  a copy of this observer class, which may be an invalid observer (default).
+ *
+ * @since 1.6
+ */
+const Observer *Observer::copy() const {
+  return new Observer();
+}
+
+/**
+ * Checks if this observer can be cast to a GeodeticObserver.
+ *
+ * @return    `true` is this observer is an instance of GeodeticObserver, otherwise `false`.
+ *
+ * @since 1.6
+ * @sa GeodeticObserver, is_geocentric()
+ */
+bool Observer::is_geodetic() const {
+  return false;
+}
+
+/**
+ * Checks if this observer can be cast to a GeocentricObserver.
+ *
+ * @return    `true` if this observer is an instance of GeocentricObserver, otherwise `false`.
+ *
+ * @since 1.6
+ * @sa GeocentricObserver, is_geodetic()
+ */
+bool Observer::is_geocentric() const {
+  return false;
+}
+
+/**
+ * Returns the underlying NOVAS C `observer` data structure.
+ *
+ * @return    pointer to the underlying C `observer` data structure.
+ *
+ * @since 1.6
+ */
+const observer * Observer::_novas_observer() const {
+  return &_observer;
+}
+
+/**
+ * Returns the observer type.
+ *
+ * @return   the observer type constant for this observer
+ *
+ * @since 1.6
+ */
+enum novas_observer_place Observer::type() const {
+  return _observer.where;
+}
+
+/**
+ * Checks if this observer is essentially the same as the other, within the tolerances associated
+ * to their defining components. Note, that an observer may not equal itself if it contains NAN or
+ * infinite components.
+ *
+ * @param other   the other observer
+ * @return        `true` if both observers effectively describe the same observing location,
+ *                within tolerances, or else `false`.
+ *
+ * @since 1.7
+ *
+ * @sa operator==(), operator!=()
+ */
+bool Observer::equals(const Observer& other) const {
+  return novas_equals_observer(&_observer, &other._observer);
+}
+
+/**
+ * Checks if two observers are essentially the same within the tolerances associated to their
+ * defining components. Same as `equals()`.
+ *
+ * @param other   the other observer
+ * @return        `true` if both observers effectively describe the same observing location,
+ *                within tolerances, or else `false`.
+ *
+ * @since 1.7
+ *
+ * @sa equals(), operator!=()
+ */
+bool Observer::operator==(const Observer& other) const {
+  return equals(other);
+}
+
+/**
+ * Checks if two observers differ given standard tolerances associated to their defining
+ * components. Same as `!equals()`.
+ *
+ * @param other   the other observer
+ * @return        `true` if this and the argument describe distinct observing locations,
+ *                or else `false`.
+ *
+ * @since 1.7
+ *
+ * @sa equals(), operator==()
+ */
+bool Observer::operator!=(const Observer& other) const {
+  return !equals(other);
+}
+
+/**
+ * Returns an observing frame for this observer at the specified time and optionally with a
+ * specified accuracy. Full accuracy frames (default) require that a high-precision planet
+ * provider is configured prior, to the call.
+ *
+ * @param time      Astrometric time of observation
+ * @param accuracy  (optional) NOVAS_FULL_ACCYRACY (default) or NOVAS_REDUCED_ACCURACY
+ * @return          An observing frame, which may be invalid if a valid observing frame
+ *                  could not be created with the accuracy, for example because no high
+ *                  accuracy planetary position provider was specified, or because either this
+ *                  observer or the time itself were invalid. The caller should typically
+ *                  check for validity after the call.
+ *
+ * @since 1.6
+ * @sa reduced_accuracy_frame_at()
+ * @sa set_planet_provider_hp(), novas_use_calceph(), novas_use_calceph_planets(), novas_use_cspice()
+ */
+Frame Observer::frame_at(const Time& time, enum novas_accuracy accuracy) const {
+  Frame f(*this, time, accuracy);
+  if(!f.is_valid())
+    novas_trace_invalid("Observer::frame_at()");
+  return f;
+}
+
+/**
+ * Returns a reduced accuracy observing frame for this observer at the specified time. Reduced
+ * accuracy frames provide 1 mas accuracy typically, and do not require a planetary or other
+ * ephemeris provider to be configured. As such, they offer a simple way for obtaining astrometric
+ * positions for catalog and orbital sources at the 1 mas level.
+ *
+ * Note, that the returned frame may be invalid, if the this observer or the time argument
+ * themselves are invalid.
+ *
+ * @param time      Astrometric time of observation
+ * @return          A reduced accuracy observing frame for the specified time of observation.
+ *
+ * @since 1.6
+ * @sa frame_at()
+ */
+Frame Observer::reduced_accuracy_frame_at(const Time& time) const {
+  Frame f = Frame::reduced_accuracy(*this, time);
+  if(!f.is_valid())
+    novas_trace_invalid("Observer::reduced_accuracy_frame_at()");
+  return f;
+}
+
+/**
+ * Returns the geocentric geometric position vector for this observer, in the GCRS, at the
+ * specified time and accuracy.
+ *
+ * @param time        Astrometric time of observation
+ * @param accuracy    (optional) NOVAS_FULL_ACCURACY (default) or NOVAS_REDUCED_ACCURACY.
+ * @return            The ICRS geometric geocentric position vector of this observer at the
+ *                    specified time.
+ *
+ * @since 1.6
+ * @sa gcrs_velocity_at()
+ */
+Position Observer::gcrs_position_at(const Time& time, enum novas_accuracy accuracy) const {
+  double p[3] = {0.0};
+  if(geo_posvel(time.jd(), time._novas_timespec()->ut1_to_tt, accuracy, &_observer, p, NULL) != 0) {
+    novas_trace_invalid("Observer::gcrs_position_at()");
+    return Position::undefined();
+  }
+  return Position(p, Unit::AU);
+}
+
+/**
+ * Returns the geocentric geometric velocity vector for this observer, in the GCRS, at the
+ * specified time and accuracy.
+ *
+ * @param time        Astrometric time of observation
+ * @param accuracy    (optional) NOVAS_FULL_ACCURACY (default) or NOVAS_REDUCED_ACCURACY.
+ * @return            The ICRS geometric geocentric velocity vector of this observer at the
+ *                    specified time.
+ *
+ * @since 1.6
+ * @sa gcrs_position_at()
+ */
+Velocity Observer::gcrs_velocity_at(const Time& time, enum novas_accuracy accuracy) const {
+  double v[3] = {0.0};
+  if(geo_posvel(time.jd(), time._novas_timespec()->ut1_to_tt, accuracy, &_observer, NULL, v) != 0) {
+    novas_trace_invalid("Observer::gcrs_velocity_at()");
+    return Velocity::undefined();
+  }
+  return Velocity(v, Unit::AU);
+}
+
+/**
+ * Returns projected _u_,_v_,_w_ coordinates for an interferometer station. That is, it returns
+ * _u_,_v_,_w_ coordinates, for this observer (station), for a given apparent line-of-sight on the
+ * sky, at the time of observation and relative to the location it was calculated for. The _u_ and
+ * _v_ coordinates are the orthogonal projections of the site, relative to the array reference, in
+ * the directions of local East and North respectively (w.r.t. the coordinate system of choice),
+ * as seen from the source; while _w_ is the distance from the array reference along the line of
+ * sight.
+ *
+ * The supplied phase center defines the time of observation and the array reference position in
+ * its observing frame. For example:
+ *
+ * ```cpp
+ *  // Define the array reference location (e.g. on Earth) as an observer place
+ *  auto reference = Observer::on_earth(...);
+ *
+ *  // Astrometric time of observation
+ *  Time time = ...;
+ *
+ *  // The observing frame of the array reference
+ *  Frame frame = reference.frame_at(time);
+ *
+ *  // E.g. an astronomical source at the interferometric phase center
+ *  Source source = ...;
+ *
+ *  // the apparent location of the phase center for an observer at the geocenter
+ *  Apparent app = source.apparent_in(frame);
+ *
+ *  // Define an interferometer station (e.g. on Earth)
+ *  auto station = Observer::on_earth(...);
+ *
+ *  // u,v,w coordinates of the station relative to the array reference (w.r.t. ICRS)
+ *  Interferometric uwv = station.to_interferometric(app);
+ *
+ *  // the geometric delay of the stanovas_site_uvwtion, relative to the array reference
+ *  Interval delay = uvw.geometric_delay()
+ * ```
+ *
+ * NOTES:
+ *
+ *  - This method does not take atmospheric refraction into account. Refraction is usually
+ *    included as a separate atmospheric delay term on top of the geometric delays returned here,
+ *    and the various other delay terms that account for optics, cabling, and digital electronics
+ *    etc.
+ *
+ *  - This method supports down to nanometer precision for sites on Earth or in Low Earth Orbit
+ *    (LEO), and sub micron (&lt;&mu;m) precision even at the distance of the Moon. However,
+ *    because its calculations are based on geocentric positions, the precision degrades with
+ *    increasing distance from Earth, and may not be suitable for interferometers far from Earth.
+ *    When precision is a concern, you might use `AstrometricPosition::to_interferometric()`
+ *    instead, with positions (and velocities) of the stations defined relative to the array
+ *    center -- enabling higher precision projections than this method for interferometers
+ *    far from Earth.
+ *
+ * @param phase_center    %Apparent place on sky from the array reference place, at the time
+ *                        of observation.
+ * @param system          (optional) Coordinate reference system type in which to return result.
+ *                        (default: ICRS). Specifically, the _u_ and _v_ directions of the
+ *                        returned projection will be aligned to the local East and North
+ *                        directions of the specified coordinate reference system type at the time
+ *                        of observation.
+ *
+ * @return            interferometric _uvw _projection of this site in the ICRS, relative to the
+ *                    array reference, viewed from the direction of the source at the specified
+ *                    time. The _u_ and _v_ directions are aligned with the local East and North
+ *                    w.r.t. the coordinate system of choice (default: ICRS).
+ *
+ * @since 1.6
+ * @sa AstrometricPosition::to_interferometric()
+ */
+Interferometric Observer::to_interferometric(const Apparent& phase_center, enum novas_reference_system system) const {
+  static const char *fn = "Observer::to_interferometric()";
+
+  if(!phase_center.is_valid()) {
+    novas_set_errno(EINVAL, fn, "input phase center is invalid");
+    return Interferometric::undefined();
+  }
+
+  if((unsigned) system >= NOVAS_REFERENCE_SYSTEMS) {
+    novas_set_errno(EINVAL, fn, "input reference system type %d is invalid", (int) system);
+    return Interferometric::undefined();
+  }
+
+  const Frame& frame = phase_center.frame();
+  const Time& t = frame.time();
+
+  // ICRS position / velocity vectors w.r.t. the observing reference
+  Position p = gcrs_position_at(t, frame.accuracy()) - frame.observer().gcrs_position_at(t, frame.accuracy());
+  Velocity v = gcrs_velocity_at(t, frame.accuracy()) - frame.observer().gcrs_velocity_at(t, frame.accuracy());
+
+  // Geocentric positions and velocities (in output system)
+  Geometric g = Geometric(frame, p, v, NOVAS_ICRS).to_system(system);
+
+  // Array phase center line-of-sight (in output system).
+  Equinox equinox = Equinox::from_system_type(system, t);
+  Position los = phase_center.equatorial().to_system(equinox, frame.accuracy()).xyz(phase_center.distance());
+
+  double uvw[3] = {0.0};
+  novas_uvw(g.position().scaled(1.0 / Unit::AU)._array(), g.velocity().scaled(Unit::day / Unit::AU)._array(), los.scaled(1.0 / Unit::AU)._array(), uvw);
+
+  return Interferometric(uvw[0], uvw[1], uvw[2]);
+}
+
+/**
+ * Returns a string representation of this observer.
+ *
+ * @return    a new string with a brief description of this observer.
+ *
+ * @since 1.6
+ */
+std::string Observer::to_string() const {
+  return "Observer type " + std::to_string(_observer.where);
+}
+
+/**
+ * Returns a new observer located at a fixed observing site.
+ *
+ * @param site    the observing site
+ * @param eop     (optional) Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                appropriate around the time of observation, such as obtained from the IERS
+ *                bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                offsets from IERS as needed (default: undefined).
+ * @return        a new observer instance for the given observing site.
+ *
+ * @since 1.6
+ * @sa moving_on_earth(), in_earth_orbit(), in_solar_system(), at_geocenter(), at_ssb()
+ */
+GeodeticObserver Observer::on_earth(const Site& site, const EOP& eop) {
+  GeodeticObserver o = GeodeticObserver(site, eop);
+  if(!o.is_valid())
+    novas_trace_invalid("Observer::on_earth()");
+  return o;
+}
+
+/**
+ * Returns a new observer that is moving, at some velocitym relative to Earth's surface,
+ * such as an airborne aircraft or balloon based observatory.
+ *
+ * @param geodetic    the momentary geodetic location of the observer.
+ * @param itrs_vel    the momentary velocity of the observer with respect to the surface
+ *                    (in ITRS).
+ * @param eop         (optional) Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                    appropriate around the time of observation, such as obtained from the IERS
+ *                    bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                    offsets from IERS as needed (default: undefined).
+ * @return            a new observer instance for the given moving observer.
+ *
+ * @since 1.6
+ * @sa on_earth(), in_earth_orbit(), in_solar_system(), at_geocenter(), at_ssb()
+ */
+GeodeticObserver Observer::moving_on_earth(const Site& geodetic, const Velocity& itrs_vel, const EOP& eop) {
+  GeodeticObserver o = GeodeticObserver(geodetic, itrs_vel, eop);
+  if(!o.is_valid())
+    novas_trace_invalid("Observer::on_earth()");
+  return o;
+}
+
+/**
+ * Instantiates a new observer that is moving relative to Earth's surface, such as an airborne
+ * observer.
+ *
+ * @param site          the momentary geodetic location of the observer.
+ * @param eop           Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                      appropriate around the time of observation, such as obtained from the IERS
+ *                      bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                      offsets from IERS as needed
+ * @param horizontal    momentary horizontal speed of moving observer.
+ * @param direction     azimuthal direction of motion (from North, measured to the East).
+ * @param vertical      (optional) momentary vertical speed of observer (default: 0).
+ *
+ * @since 1.6
+ * @sa Site::enu_to_itrf()
+ */
+GeodeticObserver Observer::moving_on_earth(const Site& site, const EOP& eop, const ScalarVelocity& horizontal, const Angle& direction, const ScalarVelocity& vertical) {
+  GeodeticObserver o = GeodeticObserver(site, eop, horizontal, direction, vertical);
+  if(!o.is_valid())
+    novas_trace_invalid("Observer::on_earth()");
+  return o;
+}
+
+/**
+ * Returns a new observer orbiting the Earth.
+ *
+ * @param pos       momentary position of the observer relative to the geocenter.
+ * @param vel       momentary velocity of the observer relative to the geocenter.
+ * @return          a new observer instance for the observer in Earth orbit.
+ *
+ * @since 1.6
+ * @sa on_earth(), in_solar_system(), at_geocenter(), at_ssb()
+ */
+GeocentricObserver Observer::in_earth_orbit(const Position& pos, const Velocity& vel) {
+  GeocentricObserver o = GeocentricObserver(pos, vel);
+  if(!o.is_valid())
+    novas_trace_invalid("Observer::in_earth_orbit()");
+  return o;
+}
+
+/**
+ * Returns a fictitious observer placed at the location of the geocenter.
+ *
+ * @return         a new fictitious observer located at the geocenter.
+ *
+ * @since 1.6
+ * @sa on_earth(), in_earth_orbit(), in_solar_system(), at_ssb()
+ */
+GeocentricObserver Observer::at_geocenter() {
+  return GeocentricObserver();
+}
+
+/**
+ * Returns a new observer in some Solar-system location.
+ *
+ * @param pos     momentary position of the observer relative to the Solar-system Barycenter
+ *                (SSB).
+ * @param vel     momentary velocity of the observer relative to the Solar-system Barycenter
+ *                (SSB).
+ * @return        a new observer instance for the given Solar-system location.
+ *
+ * @since 1.6
+ * @sa at_ssb(), at_geocenter(), on_earth(), in_earth_orbit()
+ */
+SolarSystemObserver Observer::in_solar_system(const Position& pos, const Velocity& vel) {
+  SolarSystemObserver o = SolarSystemObserver(pos, vel);
+  if(!o.is_valid())
+    novas_trace_invalid("Observer::in_solar_system()");
+  return o;
+}
+
+/**
+ * Returns a fictitious observer placed at the location of the Solar-System Barycenter (SSB).
+ *
+ * @return        a new fictitious observer located at the Solar-System Barycenter (SSB).
+ *
+ * @since 1.6
+ * @sa in_solar_system(), at_geocenter(), on_earth(), in_earth_orbit()
+ */
+SolarSystemObserver Observer::at_ssb() {
+  return SolarSystemObserver();
+}
+
+/**
+ * Returns a reference to a statically defined standard invalid observer. This invalid
+ * observer may be used inside any object that is invalid itself.
+ *
+ * @since 1.6
+ * @return    a reference to a static standard invalid observer.
+ */
+const Observer &Observer::undefined() {
+  static const Observer _invalid = Observer();
+  return _invalid;
+}
+
+/**
+ * Instantiates a new observer located at the geocenter.
+ *
+ * @since 1.6
+ */
+GeocentricObserver::GeocentricObserver()
+: Observer(NOVAS_OBSERVER_AT_GEOCENTER) {
+  _valid = true;
+}
+
+/**
+ * Instantiates a new observer located (and moving) relative to the geocenter.
+ *
+ * @param pos       momentary GCRS position of the observer relative to the geocenter.
+ * @param vel       momentary GCRS velocity of the observer relative to the geocenter.
+ *
+ * @since 1.6
+ */
+GeocentricObserver::GeocentricObserver(const Position& pos, const Velocity& vel)
+: Observer(NOVAS_OBSERVER_IN_EARTH_ORBIT, Site::undefined(), pos, vel) {
+  static const char *fn = "GeocentricObserver()";
+
+  if(!pos.is_valid())
+    novas_set_errno(EINVAL, fn, "input position contains NAN component(s)");
+  else if(!vel.is_valid())
+    novas_set_errno(EINVAL, fn, "input velocity contains NAN component(s)");
+  else
+    _valid = true;
+}
+
+/**
+ * Returns a pointer to a newly allocated copy of this geocentric observer instance.
+ *
+ * @return    pointer to new copy of this geocentric observer instance.
+ *
+ * @since 1.6
+ */
+const Observer *GeocentricObserver::copy() const {
+  return new GeocentricObserver(*this);
+}
+
+bool GeocentricObserver::is_geocentric() const {
+  return true;
+}
+
+/**
+ * Returns the momentary geocentric position of this observer in the GCRS.
+ *
+ * @return    the momentary ICRS geocentric position
+ *
+ * @since 1.6
+ * @sa gcrs_velocity()
+ */
+Position GeocentricObserver::gcrs_position() const {
+  Position pos(_observer.near_earth.sc_pos, Unit::km);
+  if(!pos.is_valid())
+    novas_trace_invalid("GeocentricObserver::gcrs_position()");
+  return pos;
+}
+
+/**
+ * Returns the momentary geocentric velocity of this observer in the GCRS.
+ *
+ * @return    the momentary ICRS geocentric velocity
+ *
+ * @since 1.6
+ * @sa gcrs_position()
+ */
+Velocity GeocentricObserver::gcrs_velocity() const {
+  Velocity vel(_observer.near_earth.sc_vel, Unit::km_per_s);
+  if(!vel.is_valid())
+    novas_trace_invalid("GeocentricObserver::gcrs_velocity()");
+  return vel;
+}
+
+/**
+ * Returns a string representation of this geocentric observer.
+ *
+ * @return    a string representation of this observer.
+ *
+ * @since 1.6
+ */
+std::string GeocentricObserver::to_string() const {
+  Position pos = gcrs_position();
+  Velocity vel = gcrs_velocity();
+
+  std::string p = (pos.is_zero()) ? "" : " at " + pos.to_string();
+  std::string v = (vel.is_zero()) ? "" : " moving at " + vel.to_string();
+
+  return "Geocentric Observer" + p + v;
+}
+
+/**
+ * Instantiates a new stationary observer located at the Solar-System Barycenter (SSB).
+ *
+ * @since 1.6
+ */
+SolarSystemObserver::SolarSystemObserver()
+: SolarSystemObserver(Position::origin(), Velocity::stationary()) {
+  const double zero[3] = {0.0};
+  make_solar_system_observer(zero, zero, &_observer);
+  _valid = true;
+}
+
+/**
+ * Instantiates a new observer in the Solar System.
+ *
+ * @param pos     momentary ICRS position of the observer relative to the Solar-system Barycenter
+ *                (SSB).
+ * @param vel     momentary ICRS velocity of the observer relative to the Solar-system Barycenter
+ *                (SSB).
+ *
+ * @since 1.6
+ */
+SolarSystemObserver::SolarSystemObserver(const Position& pos, const Velocity& vel)
+: Observer(NOVAS_SOLAR_SYSTEM_OBSERVER, Site::undefined(), pos, vel) {
+  static const char *fn = "SolarSystemObserver()";
+
+  make_solar_system_observer(pos.scaled(1.0 / Unit::au)._array(), vel.scaled(Unit::day / Unit::au)._array(), &_observer);
+
+  if(!pos.is_valid())
+    novas_set_errno(EINVAL, fn, "input position contains NAN component(s)");
+  else if(!vel.is_valid())
+    novas_set_errno(EINVAL, fn, "input velocity contains NAN component(s)");
+  else
+    _valid = true;
+}
+
+/**
+ * Returns a pointer to a newly allocated copy of this observer instance at a Solar-system location.
+ *
+ * @return    pointer to new copy of thus Solar-system based observer instance.
+ *
+ * @since 1.6
+ */
+const Observer *SolarSystemObserver::copy() const {
+  return new SolarSystemObserver(*this);
+}
+
+/**
+ * Returns the momentary location of this observer relative to the Solar-System
+ * Barycenter (SSB).
+ *
+ * @return      the momentary position of the observer relative to hte SSB.
+ *
+ * @since 1.6
+ * @sa ssb_velocity()
+ */
+Position SolarSystemObserver::ssb_position() const {
+  Position pos(_observer.near_earth.sc_pos, Unit::au);
+  if(!pos.is_valid())
+    novas_trace_invalid("SolarSystemObserver::ssb_position()");
+  return pos;
+}
+
+/**
+ * Returns the momentary velocity of this observer relative to the Solar-System
+ * Barycenter (SSB).
+ *
+ * @return      the momentary velocity of the observer relative to hte SSB.
+ *
+ * @since 1.6
+ * @sa ssb_position()
+ */
+Velocity SolarSystemObserver::ssb_velocity() const {
+  Velocity vel(_observer.near_earth.sc_vel, Unit::AU_per_day);
+  if(!vel.is_valid())
+    novas_trace_invalid("SolarSystemObserver::ssb_velocity()");
+  return vel;
+}
+
+std::string SolarSystemObserver::to_string() const {
+  Position pos = ssb_position();
+  Velocity vel = ssb_velocity();
+
+  std::string p = (pos.is_zero()) ? "SSB" : pos.to_string();
+  std::string v = (vel.is_zero()) ? "" : " moving at SSB " + vel.to_string();
+
+  return "SolarSystemObserver at " + p + v;
+}
+
+/**
+ * Instantiates a new observer at a fixed location on Earth.
+ *
+ * @param site    the observing site
+ * @param eop     (optional) Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                appropriate around the time of observation, such as obtained from the IERS
+ *                bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                offsets from IERS as needed (default: undefined).
+ *
+ * @since 1.6
+ *
+ * @sa novas_set_auto_fetch_eop()
+ */
+GeodeticObserver::GeodeticObserver(const Site& site, const EOP& eop)
+: Observer(NOVAS_OBSERVER_ON_EARTH, site, Position::origin(), Velocity::stationary()), _eop(eop) {
+  static const char *fn = "GeodeticObserver()";
+
+  if(!site.is_valid())
+    novas_set_errno(EINVAL, fn, "input site is invalid");
+  else if(!novas_is_auto_fetch_eop() && !eop.is_valid())
+    novas_set_errno(EINVAL, fn, "input EOP is invalid and automatic fetching is disabled");
+  else
+    _valid = true;
+}
+
+/**
+ * Instantiates a new observer that is moving relative to Earth's surface, such as an airborne
+ * observer.
+ *
+ * @param site    the momentary geodetic location of the observer
+ * @param vel     the momentaty velocity of the observer relative to Earth's surface (in ITRS),
+ * @param eop     (optional) Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                appropriate around the time of observation, such as obtained from the IERS
+ *                bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                offsets from IERS as needed (default: undefined).
+ *
+ * @since 1.6
+ * @sa Site::enu_to_itrf(), novas_set_auto_fetch_eop()
+ */
+GeodeticObserver::GeodeticObserver(const Site& site, const Velocity& vel, const EOP& eop)
+: Observer(NOVAS_AIRBORNE_OBSERVER, site, Position::origin(), vel), _eop(eop) {
+  static const char *fn = "GeodeticObserver()";
+
+  make_airborne_observer(site._on_surface(), vel.scaled(Unit::s / Unit::km)._array(), &_observer);
+
+  if(!site.is_valid())
+    novas_set_errno(EINVAL, fn, "input site is invalid");
+  else if(!novas_is_auto_fetch_eop() && !eop.is_valid())
+    novas_set_errno(EINVAL, fn, "input EOP is invalid and automatic fetching is disdabled");
+  else if(!vel.is_valid())
+    novas_set_errno(EINVAL, fn, "input velocity contains NAN component(s)");
+  else
+    _valid = true;
+}
+
+/**
+ * Instantiates a new observer that is moving relative to Earth's surface, such as an airborne
+ * observer.
+ *
+ * @param site          the momentary geodetic location of the observer.
+ * @param eop           Mean (preferably interpolated) Earth Orientation Parameters (EOP)
+ *                      appropriate around the time of observation, such as obtained from the IERS
+ *                      bulletins or data service, or EOP::undefined() to let `Frame` fetch polar
+ *                      offsets from IERS as needed.
+ * @param horizontal    momentary horizontal speed of moving observer.
+ * @param direction     azimuthal direction of motion (from North, measured to the East).
+ * @param vertical      (optional) momentary vertical speed of observer (default: 0).
+ *
+ * @since 1.6
+ * @sa Site::enu_to_itrf(), novas_set_auto_fetch_eop()
+ */
+GeodeticObserver::GeodeticObserver(const Site& site, const EOP& eop, const ScalarVelocity& horizontal, const Angle& direction, const ScalarVelocity& vertical)
+: GeodeticObserver(site, Velocity::stationary(), eop) {
+  static const char *fn = "GeodeticObserver()";
+
+  if(_valid)
+    errno = 0;
+
+  if(!horizontal.is_valid())
+    novas_set_errno(EINVAL, fn, "input horizontal speed is invalid");
+  if(!direction.is_valid())
+    novas_set_errno(EINVAL, fn, "input azimuthal direction of motion is invalid");
+  if(!vertical.is_valid())
+    novas_set_errno(EINVAL, fn, "input vertical speed is invalid");
+
+  _valid &= (errno == 0);
+
+  double v[3] = {0.0};
+  v[0] = horizontal.km_per_s() * sin(direction.rad());
+  v[1] = horizontal.km_per_s() * cos(direction.rad());
+  v[2] = vertical.km_per_s();
+
+  novas_enu_to_itrs(v, site.longitude().deg(), site.latitude().deg(), _observer.near_earth.sc_vel);
+}
+
+/**
+ * Returns a pointer to a newly allocated copy of this geodetic (Earth-based) observer instance.
+ *
+ * @return    pointer to new copy of this geodetic (Earth-based) observer instance.
+ *
+ * @since 1.6
+ */
+const Observer *GeodeticObserver::copy() const {
+  return new GeodeticObserver(*this);
+}
+
+bool GeodeticObserver::is_geodetic() const {
+  return true;
+}
+
+bool GeodeticObserver::equals(const Observer& other) const {
+  if(!other.is_geodetic())
+    return 0;
+
+  const GeodeticObserver& go = dynamic_cast<const GeodeticObserver&>(other);
+
+  if(fabs(_eop.xp().uas() - go._eop.xp().uas()) > 1.0)
+    return false;
+  if(fabs(_eop.yp().uas() - go._eop.yp().uas()) > 1.0)
+    return false;
+
+  return Observer::equals(other);
+}
+
+/**
+ * Returns the fixed or momentary observing site for this observer.
+ *
+ * @return    the observing site (fixed or momentary).
+ *
+ * @since 1.6
+ * @sa velocity()
+ */
+Site GeodeticObserver::site() const {
+  const on_surface *s = &_observer.on_surf;
+
+  Site site(s->longitude * Unit::deg, s->latitude * Unit::deg, s->height);
+  if(!site.is_valid())
+    novas_trace_invalid("GeodeticObserver::site()");
+  return site;
+}
+
+/**
+ * Returns the surface velocity, in the ITRS, of a moving observer, such as an airborne or
+ * balloon-borne observatory.
+ *
+ * @return    the momentary ITRS surface velocity vector of the moving observer.
+ *
+ * @since 1.6
+ * @sa enu_velocity(), Site::itrs_to_enu()
+ */
+Velocity GeodeticObserver::itrs_velocity() const {
+  Velocity vel(_observer.near_earth.sc_vel, Unit::km_per_s);
+  if(!vel.is_valid())
+    novas_trace_invalid("GeodeticObserver::itrs_velocity()");
+  return vel;
+}
+
+/**
+ * Returns the surface velocity, in the local East-North-Up (ENU) directions, of a moving observer,
+ * such as an airborne or balloon-borne observatory.
+ *
+ * @return    the momentary surface velocity vector of the moving observer in the East-North-Up
+ *            (ENU) directions at the current location.
+ *
+ * @since 1.6
+ * @sa itrs_velocity(), Site::itrs_to_enu()
+ */
+Velocity GeodeticObserver::enu_velocity() const {
+  double v[3] = {0.0};
+  novas_itrs_to_enu(_observer.near_earth.sc_vel, _observer.on_surf.longitude, _observer.on_surf.latitude, v);
+
+  Velocity vel(v, Unit::km_per_s);
+  if(!vel.is_valid())
+    novas_trace_invalid("GeodeticObserver::enu_velocity()");
+  return vel;
+}
+
+Position GeodeticObserver::gcrs_position_at(const Time &time, enum novas_accuracy accuracy) const {
+  static const char *fn = "GeodeticObserver::gcrs_position_at()";
+
+  EOP eop = eop_at(time);
+
+  double p[3] = {0.0};
+  if(novas_site_gcrs_posvel(time._novas_timespec(), &_observer.on_surf, NULL, eop.xp().arcsec(), eop.yp().arcsec(), accuracy, p, NULL) != 0) {
+    novas_trace_invalid(fn);
+    return Position::undefined();
+  }
+
+  Position pos(p, Unit::AU);
+  if(!pos.is_valid())
+    novas_trace_invalid(fn);
+
+  return pos;
+}
+
+Velocity GeodeticObserver::gcrs_velocity_at(const Time &time, enum novas_accuracy accuracy) const {
+  static const char *fn = "GeodeticObserver::gcrs_velocity_at()";
+
+  EOP eop = eop_at(time);
+
+  double v[3] = {0.0};
+  if(novas_site_gcrs_posvel(time._novas_timespec(), &_observer.on_surf, _observer.near_earth.sc_vel, eop.xp().arcsec(), eop.yp().arcsec(), accuracy, NULL, v) != 0) {
+    novas_trace_invalid(fn);
+    return Velocity::undefined();
+  }
+
+  Velocity vel(v, Unit::AU_per_day);
+  if(!vel.is_valid())
+    novas_trace_invalid(fn);
+  return vel;
+}
+
+/**
+ * Returns an equivalent geocentric observer location and motion at the specified time and accuracy.
+ *
+ * @param time        Astrometric time at which to convert this geodetic observing location to a geocentric
+ *                    observer place and movement.
+ * @param accuracy    (ooptional) NOVAS_FULL_ACCURACY (default) or NOVAS_REDUCED_ACCURACY.
+ * @return            The equivalent geocentric observer place and movement at the specified instant of
+ *                    time.
+ *
+ * @since 1.6
+ */
+GeocentricObserver GeodeticObserver::to_geocentric_at(const Time& time, enum novas_accuracy accuracy) const {
+  GeocentricObserver gc(gcrs_position_at(time, accuracy), gcrs_velocity_at(time, accuracy));
+  if(!gc.is_valid())
+    novas_trace_invalid("GeodeticObserver::to_geocentric_at()");
+  return gc;
+}
+
+/**
+ * Returns the mean Earth Orientation Parameters (EOP) appropriate around the time of observation.
+ *
+ * @return    the mean Earth Orientation Parameters (EOP) defined for this observer, not including
+ *            libration and ocean tides.
+ *
+ * @since 1.6
+ * @sa eop_at()
+ */
+const EOP& GeodeticObserver::mean_eop() const {
+  if(novas_is_auto_fetch_eop() && !_eop.is_valid())
+    novas_set_errno(EDOM, "GeodeticObserver::mean_eop()", "EOP is undefined (auto-fetch)");
+  return _eop;
+}
+
+/**
+ * Returns the Earth Orientation Parameters (EOP), including diurnal corrections for libration and
+ * ocrean tides.
+ *
+ * @param time    Astrometric time for which to apply diurnal corrections
+ * @return        EOP corrected for libration and ocean tides at the specified time.
+ *
+ * @since 1.6
+ * @sa mean_eop()
+ */
+EOP GeodeticObserver::eop_at(const Time& time) const {
+  long leap = -1;
+  double xp = NAN, yp = NAN, dut1 = NAN;
+
+  if(_eop.is_valid()) {
+    leap = _eop.leap_seconds();
+    dut1 = _eop.dUT1().seconds();
+    xp = _eop.xp().rad();
+    yp = _eop.yp().rad();
+  }
+  else if(novas_is_auto_fetch_eop()) {
+    // Fetch from IERS, if possible -- including the rotational parameters
+    novas_eop e = {};
+    novas_fetch_eop(time.jd(NOVAS_UTC), 0, &e);
+    leap = e.leap;
+    dut1 = e.dut1;
+    xp = e.xp * Unit::arcsec;
+    yp = e.yp * Unit::arcsec;
+  }
+
+  double dx = 0.0, dy = 0.0, ddut = 0.0;
+  novas_diurnal_eop_at_time(time._novas_timespec(), &dx, &dy, &ddut);
+
+  EOP eop = EOP(leap, dut1 + ddut, xp + dx * Unit::arcsec, yp + dy * Unit::arcsec);
+  if(!eop.is_valid())
+    novas_trace_invalid("GeodeticObserver::eop_at()");
+
+  return eop;
+}
+
+/**
+ * Returns a string representation of this Earth-based observer location.
+ *
+ * @return    a new string that describes this observer.
+ *
+ * @since 1.6
+ */
+std::string GeodeticObserver::to_string() const {
+  Velocity vel = enu_velocity();
+  std::string v = (vel.is_zero()) ? "" : " moving at ENU " + vel.to_string();
+  return "GeodeticObserver at " + site().to_string() + v;
+}
+
+} // namespace supernovas
+

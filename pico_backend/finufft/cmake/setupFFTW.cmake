@@ -1,0 +1,94 @@
+CPMAddPackage(
+    NAME
+    findfftw
+    GIT_REPOSITORY
+    "https://github.com/egpbos/findFFTW.git"
+    GIT_TAG
+    "master"
+    EXCLUDE_FROM_ALL
+    YES
+    GIT_SHALLOW
+    YES
+)
+
+list(APPEND CMAKE_MODULE_PATH "${findfftw_SOURCE_DIR}")
+set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" PARENT_SCOPE)
+
+if(FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL DOWNLOAD)
+    find_package(FFTW)
+    if((NOT FFTW_FOUND) OR (FINUFFT_FFTW_LIBRARIES STREQUAL DOWNLOAD))
+        if(FINUFFT_FFTW_SUFFIX STREQUAL THREADS)
+            set(FINUFFT_USE_THREADS ON)
+        else()
+            set(FINUFFT_USE_THREADS OFF)
+        endif()
+        CPMAddPackage(
+            NAME
+            fftw3
+            URL
+            "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
+            URL_HASH
+            "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+            OPTIONS
+            "ENABLE_SSE2 ON"
+            "ENABLE_AVX ON"
+            "ENABLE_AVX2 ON"
+            "BUILD_TESTS OFF"
+            "BUILD_SHARED_LIBS OFF"
+            "ENABLE_THREADS ${FINUFFT_USE_THREADS}"
+            "ENABLE_OPENMP ${FINUFFT_USE_OPENMP}"
+            "CMAKE_POLICY_VERSION_MINIMUM 3.10"
+        )
+
+        CPMAddPackage(
+            NAME
+            fftw3f
+            URL
+            "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
+            URL_HASH
+            "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+            OPTIONS
+            "ENABLE_SSE2 ON"
+            "ENABLE_AVX ON"
+            "ENABLE_AVX2 ON"
+            "ENABLE_FLOAT ON"
+            "BUILD_TESTS OFF"
+            "BUILD_SHARED_LIBS OFF"
+            "ENABLE_THREADS ${FINUFFT_USE_THREADS}"
+            "ENABLE_OPENMP ${FINUFFT_USE_OPENMP}"
+            "CMAKE_POLICY_VERSION_MINIMUM 3.10"
+        )
+        set(FINUFFT_FFTW_LIBRARIES fftw3 fftw3f)
+        if(FINUFFT_USE_THREADS)
+            list(APPEND FINUFFT_FFTW_LIBRARIES fftw3_threads fftw3f_threads)
+        elseif(FINUFFT_USE_OPENMP)
+            list(APPEND FINUFFT_FFTW_LIBRARIES fftw3_omp fftw3f_omp)
+        endif()
+
+        foreach(element IN LISTS FINUFFT_FFTW_LIBRARIES)
+            set_target_properties(
+                ${element}
+                PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${FINUFFT_POSITION_INDEPENDENT_CODE}
+                    CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded
+            )
+        endforeach()
+
+        target_include_directories(fftw3 PUBLIC $<BUILD_INTERFACE:${fftw3_SOURCE_DIR}/api>)
+    else()
+        # link against single thread fftw
+        set(FINUFFT_FFTW_LIBRARIES "FFTW::Float" "FFTW::Double")
+        # default behavior
+        if(FINUFFT_FFTW_SUFFIX STREQUAL "DEFAULT")
+            if(FINUFFT_USE_OPENMP)
+                list(APPEND FINUFFT_FFTW_LIBRARIES "FFTW::FloatOpenMP" "FFTW::DoubleOpenMP")
+            endif()
+        else()
+            # user override
+            list(APPEND FINUFFT_FFTW_LIBRARIES "FFTW::Float${FINUFFT_FFTW_SUFFIX}" "FFTW::Double${FINUFFT_FFTW_SUFFIX}")
+        endif()
+    endif()
+endif()
+
+add_library(finufft_fftlibs INTERFACE)
+target_link_libraries(finufft_fftlibs INTERFACE ${FINUFFT_FFTW_LIBRARIES})

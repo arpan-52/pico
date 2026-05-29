@@ -1,0 +1,547 @@
+/**
+ * @file
+ *
+ * @date Created  on Sep 30, 2025
+ * @author Attila Kovacs
+ */
+
+#include <cstring>
+
+/// \cond PRIVATE
+#define __NOVAS_INTERNAL_API__    ///< Use definitions meant for internal use by SuperNOVAS only
+/// \endcond
+
+#include "supernovas.h"
+
+
+
+namespace supernovas {
+
+void Equatorial::validate() {
+  static const char *fn = "Equatorial()";
+
+  if(!is_valid())
+    novas_trace_invalid(fn);
+
+  if(!_sys.is_valid()) {
+    novas_set_errno(EINVAL, fn, "invalid equatorial system: %s", _sys.to_string().c_str());
+    _valid = false;
+  }
+}
+
+/**
+ * Instantiates equatorial coordinates with the specified right-ascension (R.A.) and declination
+ * coordinates, optionally specifying a system and a distance if needed.
+ *
+ * @param ra_rad      [rad] right ascension (R.A.) coordinate
+ * @param dec_rad     [rad] declination coordinate
+ * @param system      (optional) the equatorial coordinate reference system in which the
+ *                    coordinates are specified (default: ICRS)
+ *
+ * @since 1.6
+ */
+Equatorial::Equatorial(double ra_rad, double dec_rad, const Equinox &system)
+: Spherical(ra_rad, dec_rad), _sys(system) {
+  validate();
+}
+
+/**
+ * Instantiates equatorial coordinates with the specified right-ascension (R.A.) and declination
+ * coordinates, optionally specifying a system and a distance if needed.
+ *
+ * @param ra          right ascension (R.A.) coordinate
+ * @param dec         declination coordinate
+ * @param system      (optional) the equatorial coordinate reference system in which the
+ *                    coordinates are specified (default: ICRS)
+ *
+ * @since 1.6
+ */
+Equatorial::Equatorial(const Angle& ra, const Angle& dec, const Equinox &system)
+: Spherical(ra, dec), _sys(system) {
+  validate();
+}
+
+/**
+ * Instantiates equatorial coordinates with the specified string representations of
+ * right-ascension (R.A.) and declination, optionally specifying a system and a distance if
+ * needed. After instantiation, you should check that the resulting coordinates are valid, e.g.
+ * as:
+ *
+ * ```c++
+ *   Equatorial coords = Equatorial(..., ...);
+ *   if(!coords.is_valid()) {
+ *     // oops, looks like the angles could not be parsed...
+ *     return;
+ *   }
+ * ```
+ *
+ * @param ra          string representation of the right ascension (R.A.) coordinate in HMS or
+ *                    decimal hours.
+ * @param dec         string representation of the declination coordinate as DMS or decimal
+ *                    degrees.
+ * @param system      (optional) the equatorial coordinate reference system in which the
+ *                    coordinates are specified (default: ICRS)
+ *
+ * @since 1.6
+ * @sa novas_str_hours(), novas_str_degrees() for details on string representation that can be parsed.
+ * @sa novas_parse_hours(), novas_parse_degrees() for more managed parsing from strings.
+ */
+Equatorial::Equatorial(const std::string& ra, const std::string& dec, const Equinox &system)
+: Equatorial(TimeAngle(ra), Angle(dec), system) {
+}
+
+/**
+ * Instantiates equatorial coordinates with the specified rectangular components
+ *
+ * @param pos         position vector
+ * @param system      (optional) the equatorial coordinate reference system in which the
+ *                    coordinates are specified (default: ICRS)
+ *
+ * @since 1.6
+ */
+Equatorial::Equatorial(const Position& pos, const Equinox& system)
+: Spherical(pos.to_spherical()), _sys(system) {
+  validate();
+}
+
+/**
+ * Checks if these equatorial coordinates are the same as another, within the specified
+ * precision.
+ *
+ * @param other           the reference equatorial coordinates
+ * @param precision_rad   [rad] (optional) precision for equality test (default: 1 &mu;as).
+ * @return                `true` if these coordinates are the same as the reference within the
+ *                        precision, or else `false`.
+ *
+ * @since 1.6
+ * @sa equals(), operator==()
+ */
+bool Equatorial::equals(const Equatorial& other, double precision_rad) const {
+  return (_sys == other._sys) && Spherical::equals(other, precision_rad);
+}
+
+/**
+ * Checks if these equatorial coordinates are the same as another, within the specified
+ * precision.
+ *
+ * @param other           the reference equatorial coordinates
+ * @param precision       (optional) precision for equality test (default: 1 &mu;as).
+ * @return                `true` if these coordinates are the same as the reference within the
+ *                        precision, or else `false`.
+ *
+ * @since 1.6
+ * @sa operator==()
+ */
+// cppcheck-suppress functionStatic
+bool Equatorial::equals(const Equatorial& other, const Angle& precision) const {
+  return equals(other, precision.rad());
+}
+
+/**
+ * Checks if these equatorial coordinates are the same as another, within 1 &mu;as.
+ *
+ * @param other           the reference equatorial coordinates
+ * @return                `true` if these coordinates are the same as the reference within 1 &mu;as,
+ *                        or else `false`.
+ *
+ * @since 1.6
+ * @sa operator!=()
+ */
+bool Equatorial::operator==(const Equatorial& other) const {
+  return equals(other);
+}
+
+/**
+ * Checks if these equatorial coordinates differ from another, by more than 1 &mu;as.
+ * @param other           the reference equatorial coordinates
+ * @return                `true` if these coordinates differ from the reference, by more than
+ *                        1 &mu;as, or else `false`.
+ *
+ * @since 1.6
+ * @sa operator==()
+ */
+bool Equatorial::operator!=(const Equatorial& other) const {
+  return !equals(other);
+}
+
+/**
+ * Converts these equatorial coordinates to another equatorial coordinate system. Same as
+ * `to_system()`.
+ *
+ * @param system    the equatorial coordinate system (type and epoch) to convert to.
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the specified other coordinate reference system.
+ *
+ * @since 1.6
+ * @sa to_system()
+ */
+Equatorial Equatorial::operator>>(const Equinox& system) const {
+  Equatorial e = to_system(system);
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::operator>>()");
+  return e;
+}
+
+/**
+ * Returns the equatorial system (type and epoch) in which these equatorial coordinates are defined.
+ *
+ * @return    the coordinate reference system (type and epoch).
+ *
+ * @since 1.6
+ * @sa system_type()
+ */
+const Equinox& Equatorial::system() const {
+  return _sys;
+}
+
+/**
+ * Retuens the equatorial reference system type in which thse equatorial coordinates are defined.
+ *
+ * @return    the type of coordinate reference system
+ *
+ * @since 1.6
+ * @sa system()
+ */
+enum novas_reference_system Equatorial::system_type() const {
+  return _sys.system_type();
+}
+
+/**
+ * Returns the angular distance of these equatorial coordiantes to/from the specified other
+ * equatorial coordinates.
+ *
+ * @param other   the reference equatorial coordinates
+ * @return        the angular distance of thereturn Angle::operator+(r);se coordinates to/from the argument.
+ *
+ * @since 1.6
+ *
+ * @sa offset_by()
+ */
+Angle Equatorial::distance_to(const Equatorial& other) const {
+  Angle a = Spherical::distance_to(other >> _sys);
+  if(!a.is_valid())
+    novas_trace_invalid("Equatorial::distance_to()");
+  return a;
+}
+
+/**
+ * Returns equatorial coordinates for an offset position from these along the great circle that
+ * crosses these coordinates in the speciifed direction.
+ *
+ * @param direction_rad   [rad] offset direction, measured East of the local North.
+ * @param distance_rad    [rad] offset great circle distance.
+ *
+ * @return                The equatorial coordinates of the offset position
+ *
+ * @since 1.7
+ *
+ * @sa distance_to(), Ecliptic::offset(), Galactic::offset(), Horizontal::offset()
+ */
+Equatorial Equatorial::offset(double direction_rad, double distance_rad) const {
+  double lon = NAN, lat = NAN;
+  novas_offset_by(ra().deg(), dec().deg(), direction_rad / Unit::deg, distance_rad / Unit::deg, &lon, &lat);
+  Equatorial e(lon * Unit::deg, lat * Unit::deg, system());
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::offset()");
+  return e;
+}
+
+/**
+ * Returns equatorial coordinates for an offset position from these along the great circle that
+ * crosses these coordinates in the speciifed direction.
+ *
+ * @param direction   offset direction, measured East of the local North.
+ * @param distance    offset great circle distance.
+ *
+ * @return            The equatorial coordinates of the offset position
+ *
+ * @since 1.7
+ *
+ * @sa distance_to(), Ecliptic::offset(), Galactic::offset(), Horizontal::offset()
+ */
+Equatorial Equatorial::offset(const Angle& direction, const Angle& distance) const {
+  return offset(direction.rad(), distance.rad());
+}
+
+/**
+ * Converts these equatorial coordinates to another equatorial coordinate system.
+ *
+ * @param system    the equatorial coordinate system (type and epoch) to convert to.
+ * @param accuracy  (optional) NOVAS_FULL_ACCURACY (default) or NOVAS_REDUCED_ACCURACY.
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the specified other coordinate reference system.
+ *
+ * @since 1.6
+ * @sa operator>>(), to_icrs(), to_j2000(), to_hip(), to_mod(), to_mod_at_besselian_epoch(),
+ *     to_tod(), to_cirs()
+ */
+Equatorial Equatorial::to_system(const Equinox& system, enum novas_accuracy accuracy) const {
+  static const char *fn = "Equatorial::to_system()";
+
+  if(_sys == system)
+    return *this;
+
+  double p[3] = {'\0'};
+  radec2vector(ra().hours(), dec().deg(), 1.0, p);
+
+  // Convert via GCRS
+  if(novas_sys_to_icrs(_sys.system_type(), p, _sys.jd(), accuracy, p) != 0) {
+    novas_trace_invalid(fn);
+    return Equatorial::undefined();
+  }
+
+  if(novas_icrs_to_sys(p, system.jd(), accuracy, system.system_type(), p) != 0) {
+    novas_trace_invalid(fn);
+    return Equatorial::undefined();
+  }
+
+  double r = 0.0, d = 0.0;
+  vector2radec(p, &r, &d);
+
+  Equatorial e(r * Unit::hour_angle, d * Unit::deg, system);
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_system()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the International Celestial Reference System (ICRS).
+ *
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the ICRS (= FK6).
+ *
+ * @since 1.6
+ * @sa to_system()
+ */
+Equatorial Equatorial::to_icrs() const {
+  Equatorial e = to_system(Equinox::icrs());
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_icrs()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the J2000 (= FK5) catalog coordinate system.
+ *
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the J2000 (= FK5) catalog system.
+ *
+ * @since 1.6
+ * @sa to_system(), to_icrs(), to_hip(), to_mod(), to_mod_at_besselian_epoch(), to_tod(), to_cirs()
+ */
+Equatorial Equatorial::to_j2000() const {
+  Equatorial e = to_system(Equinox::j2000());
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_j2000()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the Hipparcos catalog coordinate system (= J1991.25).
+ *
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the Hipparcos (= J1991.25) catalog system.
+ *
+ * @since 1.6
+ * @sa to_system(), to_icrs(), to_j2000()
+ */
+Equatorial Equatorial::to_hip() const {
+  Equatorial e = to_system(Equinox::hip());
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_hip()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the Mean-of-Date (MOD) catalog coordinate system, at
+ * the specified coordinate epoch. MOD coordinates are expressed with respect to the mean
+ * dynamical equator and equinox of date, accounting for precession but not nutation.
+ *
+ * @param time      [day] the astronomical time specification for the coordinate epoch.
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the MOD catalog system of date.
+ *
+ * @since 1.6
+ * @sa to_mod_at_besselian_epoch(), to_system(), to_j2000(), to_tod()
+ */
+Equatorial Equatorial::to_mod(const Time& time) const {
+  Equatorial e = to_system(Equinox::mod(time));
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_mod()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the Mean-of-Date (MOD) catalog coordinate system, at
+ * the specified Besselian coordinate epoch. MOD coordinates are expressed with respect to the
+ * mean dynamical equator and equinox of date, accounting for precession but not nutation.
+ *
+ * @param year      [yr] Besselian year for the coordinate epoch (e.g. 1950.0 for B1950).
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed in the catalog system of the specified Besselian epoch.
+ *
+ * @since 1.6
+ * @sa to_mod(), to_system(), to_j2000(), to_tod()
+ */
+Equatorial Equatorial::to_mod_at_besselian_epoch(double year) const {
+  if(!isfinite(year))
+      novas_set_errno(EINVAL, "Equatorial::to_mod_at_besselian_epoch()", "input epoch is NAN or infinite");
+
+  Equatorial e = to_system(Equinox::mod_at_besselian_epoch(year));
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_mod_at_besselian_epoch()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the True-of-Date (TOD) coordinate system, at the
+ * specified coordinate epoch. TOD is defined on the true dynamical equator of date, with its
+ * origin at the true equinox of date.
+ *
+ * @param time      [day] the astronomical time specification for the coordinate epoch.
+ * @return          new equatorial coordinates, which represent the same equatorial position as
+ *                  this, but expressed with respect to the true equator and equinox of date.
+ *
+ * @since 1.6
+ * @sa to_system(), to_cirs(), to_j2000(), to_mod()
+ */
+Equatorial Equatorial::to_tod(const Time& time) const {
+  Equatorial e = to_system(Equinox::tod(time));
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_tod()");
+  return e;
+}
+
+/**
+ * Converts these equatorial coordinates to the Celestial Intermediate Reference System (CIRS)
+ * coordinate system, at the specified coordinate epoch. CIRS is defined on the true dynamical
+ * equator of date, with its origin at the Celestial Intermediate Origin (CIO).
+ *
+ * @param time      [day] the astronomical time specification for the coordinate epoch.
+ * @return          new equatorial coordinates, which represent the same equatorial position as this,
+ *                  but with respect to the true equator and CIO of date.
+ *
+ * @since 1.6
+ * @sa to_system(), to_tod(), to_icrs()
+ */
+Equatorial Equatorial::to_cirs(const Time& time) const {
+  Equatorial e = to_system(Equinox::cirs(time));
+  if(!e.is_valid())
+    novas_trace_invalid("Equatorial::to_cirs()");
+  return e;
+}
+
+/**
+ * Returns the right ascension (R.A.) coordinate as a time-angle.
+ *
+ * @return    the right ascension (R.A.) coordinate.
+ *
+ * @since 1.6
+ * @sa dec()
+ */
+TimeAngle Equatorial::ra() const {
+  TimeAngle ta(longitude().rad());
+  if(!ta.is_valid())
+    novas_trace_invalid("Equatorial::ra()");
+  return ta;
+}
+
+/**
+ * Returns the declination coordinate as an angle.
+ *
+ * @return    the declination coordinate.
+ *
+ * @since 1.6
+ * @sa ra()
+ */
+const Angle& Equatorial::dec() const {
+  return latitude();
+}
+
+/**
+ * Returns the equivalent ecliptic coordinates corresponding to these equatorial coordinates,
+ * with respect to the same equator and equinox of date as these equatorial coordinates.
+ * CIRS coordinates will returns ecliptic coordinates w.r.t. the true equinox of date,
+ * effectively by converting CIRS to TOD before rotating into the equatorial system.
+ *
+ * @param accuracy  (optional) NOVAS_FULL_ACCURACY (default) or NOVAS_REDUCED_ACCURACY.
+ * @return          the ecliptic coordinates that represent the same position on sky as these
+ *                  equariorial coordinates.
+ *
+ * @since 1.6
+ * @sa Ecliptic::to_equatorial(), to_galactic()
+ */
+Ecliptic Equatorial::to_ecliptic(enum novas_accuracy accuracy) const {
+  double lon = NAN, lat = NAN;
+
+  if(!is_valid()) {
+    novas_set_errno(ERANGE, "Equatorial::to_ecliptic()", "invalid Equatorial instance");
+    return Ecliptic::undefined();
+  }
+
+  double r = ra().hours();
+  double d = dec().deg();
+
+  if(_sys.system_type() == NOVAS_CIRS)
+    r -= ira_equinox(_sys.jd(), NOVAS_TRUE_EQUINOX, accuracy);
+
+  equ2ecl(_sys.jd(), _sys.equator_type(), accuracy, r, d, &lon, &lat);
+
+  return Ecliptic(lon * Unit::deg, lat * Unit::deg, _sys);
+}
+
+/**
+ * Returns the equivalent galactic coordinates corresponding to these equatorial coordinates.
+ *
+ * @return    the galactic coordinates that represent the same position on sky as these equariorial
+ *            coordinates.
+ *
+ * @since 1.6
+ * @sa Galactic::to_equatorial(), to_ecliptic()
+ */
+Galactic Equatorial::to_galactic() const {
+  if(!is_valid()) {
+    novas_set_errno(ERANGE, "Equatorial::to_ecliptic()", "invalid Equatorial instance");
+    return Galactic::undefined();
+  }
+
+  Equatorial icrs = to_icrs();
+  double longitude = 0.0, latitude = 0.0;
+  equ2gal(icrs.ra().hours(), icrs.dec().deg(), &longitude, &latitude);
+
+  return Galactic(longitude * Unit::deg, latitude * Unit::deg);
+}
+
+/**
+ * Returns a string representation of these equatorial coordinates in HMS / DMS format,
+ * optionally specifying the type of separator to use and the precision to print.
+ *
+ * @param separator   (optional) the type of separators to use for the HMS / DMS representations
+ *                    of the components (default: units and spaces).
+ * @param decimals    (optional) the number of decimal places to print for the seconds
+ *                    (default: 3)
+ * @return    a new string with the human-readable representation of these equatorial coordinates.
+ *
+ * @since 1.6
+ */
+std::string Equatorial::to_string(enum novas_separator_type separator, int decimals) const {
+  return "EQU " + ra().to_string(separator, decimals + 1) + "  "
+          + dec().to_string(separator, decimals) + "  " + _sys.to_string();
+}
+
+/**
+ * Returns a reference to a statically defined standard invalid equatorial coordinates. These invalid
+ * coordinates may be used inside any object that is invalid itself.
+ *
+ * @return    a reference to a static standard invalid equatorial coordinates.
+ *
+ * @since 1.6
+ */
+const Equatorial& Equatorial::undefined() {
+  static const Equatorial _invalid = Equatorial();
+  return _invalid;
+}
+
+} // namespace supernovas
+
+
