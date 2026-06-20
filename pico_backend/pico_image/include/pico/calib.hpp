@@ -43,7 +43,4 @@ inline void apply_calib(Vis& v, const Bandpass& bp, int b, int c) {
     if (!std::isfinite(v.r) || !std::isfinite(v.i)) { v.wt = -1.0f; }
 }
 
-// MAD-based robust clip (ports svfits clip()). Marks v.wt = -1 if flagged.
-int clip_record(std::vector<Vis>& chans, float mad_thresh);
-
 } // namespace pico

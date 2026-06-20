@@ -29,9 +29,19 @@ struct Sampler {
 
 // Single baseline as ordered by svfits's get_baseline (all RR baselines first,
 // then all LL). Matches the per-record visibility layout in the raw files.
+//
+// IMPORTANT: the baseline list is built from the FULL hardware sampler set
+// (every antenna that has a sampler), so its size and ordering match the raw
+// file's on-disk record layout exactly (= svfits corr->daspar.baselines, the
+// record stride). The per-record byte offset of baseline b is therefore just
+// b*channels*sizeof(float) — contiguous. The user ANTMASK (svfits user->antmask)
+// does NOT shrink this list; instead baselines whose antennas are excluded by
+// the user mask are marked `drop` and skipped at imaging/calibration (this is
+// svfits's init_vispar selection, mapped back onto the contiguous input list).
 struct BaselineEntry {
     Sampler s0;
     Sampler s1;
+    bool    drop = false;   // antenna excluded by user ANTMASK → not imaged
 };
 
 struct AntSamp {
@@ -47,8 +57,9 @@ struct AntSamp {
 
 int load_antsamp(const std::string& path, AntSamp& out);
 
-// Apply user antmask (from svfits_par) on top of the antsamp-derived antmask,
-// rebuild the baseline list. Output baselines is the set passed to the imager.
+// Build the FULL hardware baseline list (size/order = on-disk record layout,
+// = record stride) and mark baselines excluded by the user ANTMASK as `drop`.
+// nbase is the on-disk baseline count (e.g. 1056), NOT the masked subset.
 int rebuild_baselines(AntSamp& as, uint32_t user_antmask);
 
 } // namespace pico

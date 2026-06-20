@@ -69,6 +69,16 @@ struct DirtyOut {
     double sumw = 0.0;
 };
 
+// Robust MAD clip over the sample range [begin, size). Ports svfits clip()
+// (svsubs.c:1322), which runs per (file,slice) on that slice's dumped
+// visibilities — call this after each slice with `begin` = bag size before
+// the slice, so the med/MAD scope matches svfits. One median + MAD over the
+// range's amplitudes (|c|/wt), drop samples with |amp - med| > thresh*mad
+// from BOTH bags in lockstep (they must be the same length / index-aligned).
+// Two-sided, raw MAD — matches svfits robust_stats. Returns flagged count.
+std::size_t global_clip_samples(GridSamples& dirty, GridSamples& psf,
+                                double thresh, std::size_t begin = 0);
+
 // Run FINUFFT 2D type-1 on samples g (already in [-pi,pi)) into a (n1 x n2)
 // grid, then take the magnitude/real part as the dirty image. tol is the
 // FINUFFT tolerance (e.g. 1e-6).
