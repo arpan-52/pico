@@ -123,9 +123,14 @@ int load_antsamp(const std::string& path, AntSamp& out) {
 
 int rebuild_baselines(AntSamp& as, uint32_t user_antmask) {
     as.baseline.clear();
-    const uint32_t am = as.antmask & user_antmask;
-    // svfits get_baseline order: per band, s0 then s1 ≥ s0, both samplers
-    // must have band == band and belong to enabled antennas.
+    // Build over the FULL hardware sampler set (as.antmask = every antenna that
+    // has a sampler). This is svfits get_baseline(), which uses
+    // corr->daspar.antmask — NOT the user ANTMASK — so the list size/order match
+    // the raw file's on-disk record layout (the record stride). svfits then
+    // applies the user ANTMASK in init_vispar() to SELECT a subset for output;
+    // we replicate that by marking the non-selected baselines `drop` instead of
+    // removing them, keeping the on-disk index contiguous (offset = b*nch).
+    const uint32_t am = as.antmask;
     for (int band = 0; band < as.stokes; ++band) {
         for (int s0 = 0; s0 < as.nsamp; ++s0) {
             const Sampler& a = as.sampler[s0];
@@ -136,6 +141,11 @@ int rebuild_baselines(AntSamp& as, uint32_t user_antmask) {
                 if (b.band != band) continue;
                 if (!((1u << b.ant_id) & am)) continue;
                 BaselineEntry be; be.s0 = a; be.s1 = b;
+                // svfits init_vispar: a baseline is output only if BOTH antennas
+                // are enabled in the user ANTMASK (and it is a cross baseline —
+                // autocorrelations are skipped separately at imaging time).
+                be.drop = !((1u << a.ant_id) & user_antmask)
+                       || !((1u << b.ant_id) & user_antmask);
                 as.baseline.push_back(be);
             }
         }

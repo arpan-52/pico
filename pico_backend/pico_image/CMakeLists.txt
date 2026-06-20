@@ -59,6 +59,7 @@ add_executable(pico_image
   src/grid.cpp
   src/clean.cpp
   src/fits_out.cpp
+  src/dump_vis.cpp
   src/pipeline.cpp
   src/main.cpp
 )
@@ -78,3 +79,16 @@ target_link_libraries(pico_image PRIVATE
 target_compile_options(pico_image PRIVATE -Wall -Wno-unused-parameter)
 
 install(TARGETS pico_image RUNTIME DESTINATION bin)
+
+# ---- imaging-path debugger (synthetic visibilities) --------------------------
+add_executable(pico_imgtest
+  src/imgtest.cpp
+  src/grid.cpp
+  src/clean.cpp
+)
+target_include_directories(pico_imgtest PRIVATE include)
+target_link_libraries(pico_imgtest PRIVATE
+  finufft::finufft
+  OpenMP::OpenMP_CXX
+)
+target_compile_options(pico_imgtest PRIVATE -Wall -Wno-unused-parameter)

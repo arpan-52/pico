@@ -3,12 +3,12 @@
 //   svfits get_chan_num()  — per-record (cs,ce) channel range
 //   svfits get_rec_num()   — per-file (start_rec,n_rec) selection
 //
-// Time convention: all times are seconds since rs.mjd_ref. File `idx`'s
-// first record sits at t = idx * t_slice (svfits convention — files are
-// time-multiplexed at the slice level: file 0 holds slice 0 [records 0..49],
-// file 1 holds the next slice [records 50..99], ..., file 15 holds records
-// 750..799, then file 0 holds records 800..849, etc.). Within a file,
-// consecutive slices are slice_interval = nfile*t_slice apart.
+// Time convention: all times are seconds since rs.mjd_ref. Each file's first
+// record time comes from its own slice-0 timestamp + embedded file index
+// (rs.files[i].t_start, set in raw_io — svfits get_slice_time convention; the
+// supplied file order is NOT trusted). Files are time-multiplexed at the
+// slice level; within a file, consecutive slices are slice_interval =
+// nfile*t_slice apart.
 //
 // Cold-plasma dispersion delay (s at freq_hz):
 //     Δt = K0 · DM / f_GHz²    with K0 = 4.148808e-3 s·GHz²·(pc/cm³)⁻¹
@@ -20,7 +20,9 @@
 
 namespace pico {
 
-static constexpr double K0 = 4.148808e-3;
+// svfits uses 4.15e-3 (svsubs.c:35); match it exactly so record/channel
+// selection is identical record-for-record.
+static constexpr double K0 = 4.15e-3;
 
 int burst_chans_for_record(const Config& cfg, double trec, double integ_sec,
                            int nchan_full, int* cs, int* ce) {
@@ -80,7 +82,7 @@ int compute_record_ranges(const Config& cfg, RawSet& rs) {
 
     for (int i = 0; i < cfg.nfile; ++i) {
         auto& f = rs.files[i];
-        const double t_start = i * t_slice;        // file-i first-record absolute time
+        const double t_start = f.t_start;  // from per-file timestamp + embedded idx
 
         int start_slice = static_cast<int>(std::floor((t_burst - t_start) / slice_interval));
         if (start_slice < 0) start_slice = 0;

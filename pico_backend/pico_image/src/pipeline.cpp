@@ -16,13 +16,16 @@
 #include "pico/grid.hpp"
 #include "pico/clean.hpp"
 #include "pico/fits_out.hpp"
+#include "pico/dump_vis.hpp"
 #include "pico/half.hpp"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <complex>
 #include <vector>
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <omp.h>
 
 namespace pico {
@@ -45,7 +48,7 @@ inline void decode_packed(const float* slot, Vis& v) {
 static void update_burst(Config& cfg, double mjd_ref) {
     if (!cfg.update_burst) return;
     auto& b = cfg.burst;
-    constexpr double K0 = 4.148808e-3;
+    constexpr double K0 = 4.15e-3;  // match svfits (svsubs.c:35)
     const double fb = b.freq * 1e-9;                                  // GHz
     const double f_hi = std::max(cfg.freq0_hz, cfg.freq1_hz) * 1e-9;
     const double f_lo = std::min(cfg.freq0_hz, cfg.freq1_hz) * 1e-9;
@@ -55,7 +58,7 @@ static void update_burst(Config& cfg, double mjd_ref) {
                     + K0 * b.DM * (1.0/(f_lo*f_lo) - 1.0/(fb*fb));
     b.width = tl - th;
     // burst.t in seconds since mjd_ref (the time origin used everywhere else
-    // in pico_image — t_start[idx] = idx*t_slice, trec measured from the same
+    // in pico_image — per-file t_start and trec are measured from the same
     // origin). burst.mjd is the burst arrival time at burst.freq, in MJD.
     b.t = (b.mjd - mjd_ref) * 86400.0;
     std::fprintf(stderr,
@@ -87,6 +90,14 @@ int run_pipeline(const Config& cfg_in) {
                      rs.files[i].start_rec + rs.files[i].n_rec);
     }
 
+    // Debug: dump calibrated visibilities to a svfits-format UVFITS for direct
+    // comparison (env PICO_DUMP_UVFITS=<path>). Dumps and returns without imaging.
+    if (const char* dpath = std::getenv("PICO_DUMP_UVFITS")) {
+        int dr = dump_uvfits(cfg, as, rs, dpath);
+        close_raw_set(rs);
+        return dr;
+    }
+
     const double ref_freq = resolve_ref_freq(cfg);
     const double ch_w     = (cfg.freq1_hz - cfg.freq0_hz) / cfg.nchan;
     std::fprintf(stderr, "MFS ref_freq = %.3f MHz; ch_width = %.3f kHz\n",
@@ -105,6 +116,31 @@ int run_pipeline(const Config& cfg_in) {
     const int nch = rs.channels;
 
     const double dt_rec = rs.t_slice / rs.rec_per_slice;
+
+    // Per-baseline visibility conjugation (svfits init_vispar `flip`,
+    // svsubs.c:196-212, applied at svsubs.c:1675). svfits flips imag based on
+    // (antenna order XOR sideband), then images with uvw = B[ant_hi]-B[ant_lo].
+    // pico's uvw already pairs by the SAME samplers as the stored vis
+    // (uvw.cpp: B[s1.ant]-B[s0.ant]), so the antenna-order half of svfits's
+    // rule cancels and only the global sideband conjugation remains:
+    // conjugate every cross-correlation when USB (net_sign >= 0, freq1>=freq0).
+    const bool conj_vis = (cfg.freq1_hz >= cfg.freq0_hz);
+
+    // ---- DC-term diagnostic accumulators -------------------------------
+    // The dirty-image centre pixel == weighted-mean visibility (the DC /
+    // zero-spacing term). To localise a spurious central source we decompose
+    // it over the samples that actually get gridded:
+    //   raw  DC = <V_raw>      (pre-calib decoded vis)  -> #3 raw bias / #2 autocorr
+    //   off  DC = <off_src>    (what calib subtracted)  -> #1 off-source residual
+    //   cal  DC = <V_calib>    (final gridded vis)      == centre pixel
+    // Per-baseline (lock-free: parallel-for is over b, record loop is serial,
+    // so each b is touched by one thread at a time).
+    std::vector<double> bl_w (as.nbase, 0.0);
+    std::vector<double> bl_cre(as.nbase, 0.0), bl_cim(as.nbase, 0.0); // calib*wt
+    std::vector<double> bl_rre(as.nbase, 0.0), bl_rim(as.nbase, 0.0); // raw  *wt
+    std::vector<double> bl_ore(as.nbase, 0.0), bl_oim(as.nbase, 0.0); // offsrc*wt
+    std::vector<long>   bl_n (as.nbase, 0);
+    std::vector<long>   bl_nzero(as.nbase, 0);  // |u|=|v|=0 samples gridded (centre leak)
 
     for (int i = 0; i < cfg.nfile; ++i) {
         auto& f = rs.files[i];
@@ -126,7 +162,10 @@ int run_pipeline(const Config& cfg_in) {
             if (cfg.do_band || cfg.do_base)
                 make_bandpass(cfg, rs, as, rbuf.data(), i, sl, bp);
 
-            const double t_slice_start = i * rs.t_slice + sl * rs.slice_interval;
+            // Bag size before this slice — per-slice clip scope (svfits.c:697).
+            const std::size_t bag0 = dirty_samples.size();
+
+            const double t_slice_start = f.t_start + sl * rs.slice_interval;
             for (int r = 0; r < rs.rec_per_slice; ++r) {
                 const int global_rec = sl * rs.rec_per_slice + r;
                 if (global_rec < f.start_rec ||
@@ -247,6 +286,17 @@ int run_pipeline(const Config& cfg_in) {
 
                 #pragma omp parallel for num_threads(cfg.num_threads)
                 for (int b = 0; b < as.nbase; ++b) {
+                    // Skip autocorrelations (svfits svsubs.c:1288 "ignore selfs").
+                    // They sit at u=v=w=0 (total power, large +real) and dump
+                    // straight onto the image centre. We skip at processing time
+                    // rather than dropping them from as.baseline, because b also
+                    // indexes the raw record block (rec_base + b*nch) and the
+                    // correlator layout includes the self-pairs.
+                    if (as.baseline[b].s0.ant_id == as.baseline[b].s1.ant_id) continue;
+                    // Skip baselines excluded by the user ANTMASK (svfits
+                    // init_vispar selection); kept in the list only so b stays a
+                    // contiguous index into the on-disk record.
+                    if (as.baseline[b].drop) continue;
                     const float* row = rec_base +
                         static_cast<std::ptrdiff_t>(b) * nch;
                     // Decode + calibrate + clip
@@ -255,19 +305,45 @@ int run_pipeline(const Config& cfg_in) {
                         Vis v; decode_packed(row + c, v);
                         if (cfg.do_band || cfg.do_base)
                             apply_calib(v, bp, b, c);
+                        // svfits flip: conjugate AFTER off_src/abp (svsubs.c:1675)
+                        if (conj_vis) v.i = -v.i;
                         ch[c - cs] = v;
                     }
-                    if (cfg.do_flag) clip_record(ch, cfg.thresh);
+                    // NOTE: no per-record clip here. svfits's burst path has
+                    // exactly one flagger: the per-slice clip() (svfits.c:697),
+                    // applied below after the slice's samples are gathered.
 
                     GridSamples local_d, local_p;
                     local_d.reserve(ch.size());
                     local_p.reserve(ch.size());
                     for (int c = cs; c < ce; ++c) {
+                        const Vis& vv = ch[c - cs];
+                        // Unified keep test so the dirty and psf sample bags stay
+                        // index-aligned: push_sample alone would drop a non-finite
+                        // vis from dirty while keeping its (1,0) psf twin, which
+                        // would later desync global_clip_samples' lockstep mask.
+                        if (vv.wt <= 0.0f ||
+                            !std::isfinite(vv.r) || !std::isfinite(vv.i)) continue;
                         const double freq_c = cfg.freq0_hz + c * ch_w;
-                        push_sample(local_d, uvw_app[b], freq_c, ch[c - cs]);
+                        push_sample(local_d, uvw_app[b], freq_c, vv);
                         // PSF samples: same uvw, value = (1, 0)*wt
-                        Vis w = ch[c - cs]; w.r = 1.0f; w.i = 0.0f;
+                        Vis w = vv; w.r = 1.0f; w.i = 0.0f;
                         push_sample(local_p, uvw_app[b], freq_c, w);
+
+                        // ---- DC-term diagnostic (only samples actually gridded).
+                        // Lock-free: each b is owned by one thread per record.
+                        Vis rawv; decode_packed(row + c, rawv);
+                        Complex off{0, 0};
+                        if ((cfg.do_band || cfg.do_base) &&
+                            !bp.off_src.empty() && b < bp.n_base)
+                            off = bp.off_src[b][c];
+                        const double wq = vv.wt;
+                        bl_w[b]   += wq;
+                        bl_cre[b] += double(vv.r)   * wq; bl_cim[b] += double(vv.i)   * wq;
+                        bl_rre[b] += double(rawv.r) * wq; bl_rim[b] += double(rawv.i) * wq;
+                        bl_ore[b] += off.real()     * wq; bl_oim[b] += off.imag()     * wq;
+                        bl_n[b]   += 1;
+                        if (uvw_app[b].u == 0.0 && uvw_app[b].v == 0.0) ++bl_nzero[b];
                     }
                     #pragma omp critical
                     {
@@ -290,10 +366,77 @@ int run_pipeline(const Config& cfg_in) {
                     }
                 }
             }
+
+            // Per-slice robust MAD clip on this slice's gathered samples —
+            // svfits's one and only burst-path flagger (clip() per file/slice,
+            // svfits.c:690-700).
+            if (cfg.do_flag && dirty_samples.size() > bag0) {
+                std::fprintf(stderr, "clip file=%d slice=%d: ", i, sl);
+                global_clip_samples(dirty_samples, psf_samples, cfg.thresh, bag0);
+            }
         }
     }
     close_raw_set(rs);
     std::fprintf(stderr, "gathered %zu visibility samples\n", dirty_samples.size());
+
+    // ===================== DC-term decomposition ========================
+    // centre pixel == weighted-mean visibility. Decompose it to see which
+    // case drives a spurious central source on noise:
+    //   raw DC big              -> #3 raw bias or #2 autocorr leak
+    //   raw DC ~0 but cal DC big-> #1 off-source subtraction residual
+    //   one baseline dominates  -> hot/RFI baseline (or undetected autocorr)
+    {
+        double W = 0, Cre = 0, Cim = 0, Rre = 0, Rim = 0, Ore = 0, Oim = 0;
+        long zero_uvw = 0, autoc_gridded = 0;
+        for (int b = 0; b < as.nbase; ++b) {
+            W += bl_w[b];
+            Cre += bl_cre[b]; Cim += bl_cim[b];
+            Rre += bl_rre[b]; Rim += bl_rim[b];
+            Ore += bl_ore[b]; Oim += bl_oim[b];
+            zero_uvw += bl_nzero[b];
+            if (bl_n[b] > 0 &&
+                as.baseline[b].s0.ant_id == as.baseline[b].s1.ant_id)
+                autoc_gridded += bl_n[b];
+        }
+        const double iW = (W > 0) ? 1.0 / W : 0.0;
+        std::fprintf(stderr,
+            "DC-DECOMP: sumw=%.6g  rawDC=(%.6g,%.6g)  offsrcDC=(%.6g,%.6g)  "
+            "calDC=(%.6g,%.6g) |calDC|=%.6g  <-- == dirty centre pixel\n",
+            W, Rre*iW, Rim*iW, Ore*iW, Oim*iW,
+            Cre*iW, Cim*iW, std::hypot(Cre*iW, Cim*iW));
+        std::fprintf(stderr,
+            "DC-DECOMP: gridded autocorr(a0==a1) samples=%ld (MUST be 0)  "
+            "zero-uvw gridded samples=%ld (centre leak if >0)\n",
+            autoc_gridded, zero_uvw);
+
+        // Top baselines by contribution to the calibrated DC vector.
+        std::vector<int> ord(as.nbase);
+        for (int b = 0; b < as.nbase; ++b) ord[b] = b;
+        std::sort(ord.begin(), ord.end(), [&](int a, int c) {
+            return std::hypot(bl_cre[a], bl_cim[a]) >
+                   std::hypot(bl_cre[c], bl_cim[c]);
+        });
+        const int top = std::min(8, as.nbase);
+        for (int k = 0; k < top; ++k) {
+            const int b = ord[k];
+            if (bl_n[b] == 0) break;
+            const double w = (bl_w[b] > 0) ? bl_w[b] : 1.0;
+            std::fprintf(stderr,
+                "DC-DECOMP: top[%d] base=%d a0=%d a1=%d n=%ld  "
+                "rawmean=(%.4g,%.4g) calmean=(%.4g,%.4g) |cal|=%.4g  "
+                "frac-of-calDC=%.3f\n",
+                k, b, as.baseline[b].s0.ant_id, as.baseline[b].s1.ant_id,
+                bl_n[b], bl_rre[b]/w, bl_rim[b]/w, bl_cre[b]/w, bl_cim[b]/w,
+                std::hypot(bl_cre[b], bl_cim[b])/w,
+                (std::hypot(Cre, Cim) > 0)
+                    ? std::hypot(bl_cre[b], bl_cim[b]) / std::hypot(Cre, Cim)
+                    : 0.0);
+        }
+    }
+    // ====================================================================
+
+    // Flagging already done per (file,slice) above — svfits has no further
+    // global clip stage after copy_burst.
 
     // Map u_λ, v_λ → FINUFFT coords in [-π, π) for the requested cellsize.
     const double cellsize_rad = cfg.cellsize_asec * (M_PI / 180.0 / 3600.0);
